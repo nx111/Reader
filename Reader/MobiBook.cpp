@@ -1,16 +1,18 @@
 #include "MobiBook.h"
 #include "Utils.h"
 #include "types.h"
-#include <regex>
+#include "resource.h"
+#include <algorithm>
+#include <limits.h>
 
 
 #include <shlwapi.h>
-#include <comdef.h>
 
 #include "libxml/xmlreader.h"
 #include "libxml/HTMLtree.h"
 #include "libxml/HTMLparser.h"
 #include "libxml/xpath.h"
+#include "libxml/uri.h"
 
 
 /**
@@ -52,7 +54,9 @@ const char * libmobi_msg(const MOBI_RET ret) {
 }
 
 MobiBook::MobiBook()
-    : m_Cover(NULL)
+    : m_OpenErrorMessage(0)
+    , m_Cover(NULL)
+    , m_CoverStream(NULL)
 {
     /* Initialize main MOBIData structure */
     /* Must be deallocated with mobi_free() when not needed */
@@ -62,15 +66,19 @@ MobiBook::~MobiBook()
 {
     ForceKill();
     FreeFilelist();
-    if (m_Cover)
-    {
-        delete m_Cover;
-    }
+    delete m_Cover;
+    if (m_CoverStream)
+        m_CoverStream->Release();
 }
 
 book_type_t MobiBook::GetBookType()
 {
     return book_mobi;
+}
+
+UINT MobiBook::GetOpenErrorMessage(void)
+{
+    return m_OpenErrorMessage;
 }
 
 BOOL MobiBook::SaveBook(HWND hWnd)
@@ -83,103 +91,217 @@ BOOL MobiBook::UpdateChapters(int offset)
     return FALSE;
 }
 
+namespace
+{
+bool MobiAsciiSpace(unsigned char value)
+{
+    return value == ' ' || value == '\t' || value == '\r' || value == '\n' ||
+        value == '\f' || value == '\v';
+}
+
+bool MobiAsciiPrefix(const unsigned char *data, size_t size, const char *prefix)
+{
+    for (size_t i = 0; prefix[i]; ++i)
+    {
+        if (i >= size)
+            return false;
+        unsigned char value = data[i];
+        if (value >= 'A' && value <= 'Z')
+            value += 'a' - 'A';
+        if (value != (unsigned char)prefix[i])
+            return false;
+    }
+    return true;
+}
+
+bool MobiHtmlDocument(const unsigned char *data, size_t size)
+{
+    // PalmDoc predates MOBI headers and can hold plain text OR an HTML
+    // document. Require an explicit HTML root/doctype; arbitrary <...> and
+    // &entities; in ordinary prose must remain literal text.
+    const unsigned char *end = data + size;
+    if (size >= 3 && data[0] == 0xef && data[1] == 0xbb && data[2] == 0xbf)
+        data += 3;
+    while (data < end)
+    {
+        while (data < end && MobiAsciiSpace(*data))
+            ++data;
+        size = end - data;
+        const char *terminator = NULL;
+        size_t markerSize = 0;
+        if (MobiAsciiPrefix(data, size, "<!--"))
+        {
+            terminator = "-->";
+            markerSize = 3;
+        }
+        else if (MobiAsciiPrefix(data, size, "<?xml") && size > 5 && MobiAsciiSpace(data[5]))
+        {
+            terminator = "?>";
+            markerSize = 2;
+        }
+        if (terminator)
+        {
+            data = std::search(data, end, terminator, terminator + markerSize);
+            if (data == end)
+                return false;
+            data += markerSize;
+            continue;
+        }
+        if (MobiAsciiPrefix(data, size, "<!doctype") && size > 9 && MobiAsciiSpace(data[9]))
+        {
+            data += 9;
+            while (data < end && MobiAsciiSpace(*data))
+                ++data;
+            return MobiAsciiPrefix(data, end - data, "html") &&
+                data + 4 < end && (MobiAsciiSpace(data[4]) || data[4] == '>');
+        }
+        return MobiAsciiPrefix(data, size, "<html") && size > 5 &&
+            (MobiAsciiSpace(data[5]) || data[5] == '>' || data[5] == '/');
+    }
+    return false;
+}
+}
+
 BOOL MobiBook::ParserBook(HWND hWnd)
 {
     BOOL ret = FALSE;
-
     MOBIData *m = mobi_init();
-    MOBIRawml *rawml;
-    mobi_t mobi;    
-    
+    MOBIRawml *rawml = NULL;
+    FILE *file = NULL;
+    MOBI_RET mobi_ret = MOBI_SUCCESS;
+    mobi_t mobi;
     manifests_t::iterator itor;
     navpoints_t::iterator it;
 
-    if (m == NULL) {
-        printf("Memory allocation failed\n");
-        return FALSE;
-    }    
-
-    MOBI_RET mobi_ret = mobi_load_filename(m, _bstr_t(m_fileName));
-    if (mobi_ret != MOBI_SUCCESS) {
-        mobi_free(m);
-        printf("Error loading file (%s)\n", libmobi_msg(mobi_ret));
-        return FALSE;
+    delete m_Cover;
+    m_Cover = NULL;
+    if (m_CoverStream)
+    {
+        m_CoverStream->Release();
+        m_CoverStream = NULL;
     }
+    m_OpenErrorMessage = IDS_MOBI_INVALID;
+    if (m == NULL)
+        goto end;
+
+    // libmobi's filename API takes an ANSI path on Windows. Open the file here
+    // so Chinese (and other Unicode) filenames work without a lossy conversion.
+    file = _wfopen(m_fileName, L"rb");
+    if (file == NULL)
+    {
+        m_OpenErrorMessage = 0;
+        goto end;
+    }
+    // AZW3 is KF8. Prefer KF8 also when the container has a KF7 fallback.
+    m->use_kf8 = true;
+    mobi_ret = mobi_load_file(m, file);
+    fclose(file);
+    file = NULL;
+    if (mobi_ret != MOBI_SUCCESS)
+        goto end;
+
+    // Do not try to decrypt books. Hybrid containers may have a second header;
+    // reject any nonzero encryption type, including unknown future variants.
+    if ((m->rh && m->rh->encryption_type != MOBI_ENCRYPTION_NONE) ||
+        (m->next && m->next->rh && m->next->rh->encryption_type != MOBI_ENCRYPTION_NONE))
+    {
+        m_OpenErrorMessage = IDS_MOBI_ENCRYPTED;
+        goto end;
+    }
+    if (mobi_is_replica(m))
+    {
+        m_OpenErrorMessage = IDS_MOBI_UNSUPPORTED;
+        goto end;
+    }
+    if (m_bForceKill)
+        goto end;
 
     rawml = mobi_init_rawml(m);
-    if (rawml == NULL) {
-        printf("Memory allocation failed\n");
-        return FALSE;
-    }    
-
-    /* Parse rawml text and other data held in MOBIData structure into MOBIRawml structure */
-    mobi_ret = mobi_parse_rawml(rawml, m);
-    if (mobi_ret != MOBI_SUCCESS) {
-        printf("Parsing rawml failed (%s)\n", libmobi_msg(mobi_ret));
-        return FALSE;
+    if (rawml == NULL)
+        goto end;
+    if (m->mh == NULL)
+    {
+        // Older TEXt/REAd PalmDoc may be real plain text. First unpack without
+        // HTML/link reconstruction (which itself rewrites literal filepos
+        // attributes), while still letting libmobi normalize CP1252 to UTF-8.
+        mobi_ret = mobi_parse_rawml_opt(rawml, m, false, false, false);
+        if (mobi_ret != MOBI_SUCCESS || m_bForceKill)
+            goto end;
+        MOBIPart *part = rawml->markup;
+        if (!part || !part->data || part->size == 0 || part->size > INT_MAX)
+            goto end;
+        if (!MobiHtmlDocument(part->data, part->size))
+        {
+            wchar_t *text = NULL;
+            int length = 0;
+            if (!DecodeText((const char *)part->data, (int)part->size, &text, &length) ||
+                length <= 0 || m_bForceKill)
+            {
+                free(text);
+                goto end;
+            }
+            free(m_Text);
+            m_Text = text;
+            m_Length = length;
+            m_Chapters.clear();
+            ret = TRUE;
+            m_OpenErrorMessage = 0;
+            goto end;
+        }
+        // PalmDoc containing an explicit HTML document keeps metadata, TOC,
+        // resource and link reconstruction via the normal Mobipocket path.
+        mobi_free_rawml(rawml);
+        rawml = mobi_init_rawml(m);
+        if (rawml == NULL)
+            goto end;
     }
-
-
-
-    // unzip mobi file
-    if (!UnzipBook(rawml, m, mobi))
+    mobi_ret = mobi_parse_rawml(rawml, m);
+    if (mobi_ret != MOBI_SUCCESS || m_bForceKill)
         goto end;
 
-    mobi.path = "";
-    // parser mobi file
-    if (!ParserOpf(mobi))
+    // The same reconstructed OPF, NCX, markup and resources serve MOBI and KF8.
+    if (!UnzipBook(rawml, m, mobi) || !ParserOpf(mobi))
         goto end;
-
     if (!ParserNcx(mobi))
         goto end;
-
-    // parser mobi cover image
-    ParserCover(mobi, m);
-
-    // Parser mobi chapters & text
-
-
+    ParserCover(mobi, m); // A missing/unsupported cover must not hide the text.
     if (!ParserChapters(mobi))
         goto end;
-
-
     ret = TRUE;
+    m_OpenErrorMessage = 0;
 
 end:
-    // free mobi
-    for (itor = mobi.manifests.begin(); itor != mobi.manifests.end(); itor++)
+    if (!ret && mobi_ret != MOBI_SUCCESS)
     {
+        printf("Error reading MOBI/KF8 (%s)\n", libmobi_msg(mobi_ret));
+        if (mobi_ret == MOBI_FILE_ENCRYPTED || mobi_ret == MOBI_DRM_UNSUPPORTED ||
+            mobi_ret == MOBI_DRM_KEYNOTFOUND || mobi_ret == MOBI_DRM_EXPIRED)
+            m_OpenErrorMessage = IDS_MOBI_ENCRYPTED;
+        else if (mobi_ret == MOBI_FILE_UNSUPPORTED)
+            m_OpenErrorMessage = IDS_MOBI_UNSUPPORTED;
+    }
+    for (itor = mobi.manifests.begin(); itor != mobi.manifests.end(); ++itor)
         delete itor->second;
-    }
-    mobi.manifests.clear();
-    for (it = mobi.navpoints.begin(); it != mobi.navpoints.end(); it++)
-    {
+    for (it = mobi.navpoints.begin(); it != mobi.navpoints.end(); ++it)
         delete it->second;
-    }
-    mobi.navpoints.clear();
-    mobi.spines.clear();
-    FreeFilelist();
-
-    /* Free MOBIRawml structure */
+    FreeFilelist(); // Its pointers belong to rawml, not to this map.
     if (rawml != NULL)
-    {
         mobi_free_rawml(rawml);
-    }
-
-    /* Free MOBIData structure */
+    if (file != NULL)
+        fclose(file);
     mobi_free(m);
 
-    
     if (!ret)
     {
-        if (m_Cover)
+        delete m_Cover;
+        m_Cover = NULL;
+        if (m_CoverStream)
         {
-            delete m_Cover;
-            m_Cover = NULL;
+            m_CoverStream->Release();
+            m_CoverStream = NULL;
         }
         CloseBook();
     }
-
     return ret;
 }
 
@@ -211,6 +333,8 @@ BOOL MobiBook::UnzipBook(MOBIRawml *rawml, MOBIData *m, mobi_t &mobi)
         /* Linked list of MOBIPart structures in rawml->markup holds main text files */
         MOBIPart *curr = rawml->markup;
         while (curr != NULL) {
+            if (curr->size > INT_MAX || (curr->size && !curr->data))
+                return FALSE;
             MOBIFileMeta file_meta = mobi_get_filemeta_by_type(curr->type);
             snprintf(partname, sizeof(partname), "part%05zu.%s", curr->uid, file_meta.extension);
             printf("%s\n", partname);
@@ -229,6 +353,8 @@ BOOL MobiBook::UnzipBook(MOBIRawml *rawml, MOBIData *m, mobi_t &mobi)
         /* skip raw html file */
         curr = curr->next;
         while (curr != NULL) {
+            if (curr->size > INT_MAX || (curr->size && !curr->data))
+                return FALSE;
             MOBIFileMeta file_meta = mobi_get_filemeta_by_type(curr->type);
             snprintf(partname, sizeof(partname), "flow%05zu.%s", curr->uid, file_meta.extension);
             printf("%s\n", partname);
@@ -246,6 +372,8 @@ BOOL MobiBook::UnzipBook(MOBIRawml *rawml, MOBIData *m, mobi_t &mobi)
         MOBIPart *curr = rawml->resources;
         /* jpg, gif, png, bmp, font, audio, video also opf, ncx */
         while (curr != NULL) {
+            if (curr->size > INT_MAX || (curr->size && !curr->data))
+                return FALSE;
             MOBIFileMeta file_meta = mobi_get_filemeta_by_type(curr->type);
             if (curr->size > 0) {
                 int n = snprintf(partname, sizeof(partname), "resource%05zu.%s", curr->uid, file_meta.extension);
@@ -282,675 +410,423 @@ BOOL MobiBook::UnzipBook(MOBIRawml *rawml, MOBIData *m, mobi_t &mobi)
     return TRUE;
 }
 
+namespace
+{
+xmlNodePtr MobiChild(xmlNodePtr parent, const char *name)
+{
+    for (xmlNodePtr node = parent ? parent->children : NULL; node; node = node->next)
+        if (node->type == XML_ELEMENT_NODE && xmlStrEqual(node->name, BAD_CAST name))
+            return node;
+    return NULL;
+}
+
+std::string MobiProperty(xmlNodePtr node, const char *name)
+{
+    xmlChar *value = xmlGetProp(node, BAD_CAST name);
+    std::string result = value ? (const char *)value : "";
+    xmlFree(value);
+    return result;
+}
+
+std::string MobiHref(const std::string &href)
+{
+    // Unlike form URL decoding, '+' in an ebook path is a literal plus sign.
+    char *value = xmlURIUnescapeString(href.c_str(), 0, NULL);
+    std::string result = value ? value : href;
+    xmlFree(value);
+    return result;
+}
+
+void MobiNavPoints(xmlNodePtr parent, navpoints_t &navpoints, int &order)
+{
+    for (xmlNodePtr node = parent ? parent->children : NULL; node; node = node->next)
+    {
+        if (node->type != XML_ELEMENT_NODE || !xmlStrEqual(node->name, BAD_CAST "navPoint"))
+            continue;
+        xmlNodePtr label = MobiChild(node, "navLabel");
+        xmlNodePtr content = MobiChild(node, "content");
+        xmlChar *text = label ? xmlNodeGetContent(label) : NULL;
+        std::string src = content ? MobiHref(MobiProperty(content, "src")) : "";
+        if (text && *text && !src.empty())
+        {
+            navpoint_t *nav = new navpoint_t;
+            nav->id = MobiProperty(node, "id");
+            nav->src = src;
+            nav->text = (const char *)text;
+            nav->order = order++;
+            // Duplicate destinations are common in nested NCX files. Keep the
+            // first label instead of discarding the entire table of contents.
+            if (!navpoints.insert(std::make_pair(src, nav)).second)
+                delete nav;
+        }
+        xmlFree(text);
+        MobiNavPoints(node, navpoints, order);
+    }
+}
+}
+
 BOOL MobiBook::ParserOpf(mobi_t &mobi)
 {
-    filelist_t::iterator itor;
-    xmlDocPtr doc = NULL;
-    const xmlChar *xpath = NULL;
-    xmlXPathContextPtr xpathctx = NULL;
-    xmlXPathObjectPtr xpathobj = NULL;
-    xmlNodeSetPtr nodeset;
-    xmlChar *keyword;
-    manifest_t *item = NULL;
-    manifests_t::iterator it;
-    int i,j;
-    BOOL ret = FALSE;
-    char buff[1024];
-
-    itor = m_flist.find(mobi.opf);
-    if (itor == m_flist.end())
-        goto end;
-
-    doc = xmlReadMemory((const char *)itor->second.data, itor->second.size, NULL, NULL, XML_PARSE_RECOVER | XML_PARSE_NOBLANKS);
+    filelist_t::iterator file = m_flist.find(mobi.opf);
+    if (file == m_flist.end() || m_bForceKill)
+        return FALSE;
+    xmlDocPtr doc = xmlReadMemory((const char *)file->second.data, file->second.size,
+        NULL, NULL, XML_PARSE_NONET | XML_PARSE_NOBLANKS);
     if (!doc)
-        goto end;
+        return FALSE;
 
-    if (m_bForceKill)
+    BOOL ret = FALSE;
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+    xmlNodePtr manifest = MobiChild(root, "manifest");
+    xmlNodePtr spine = MobiChild(root, "spine");
+    if (!root || !xmlStrEqual(root->name, BAD_CAST "package") || !manifest || !spine)
         goto end;
-
-    xpathctx = xmlXPathNewContext(doc);
-    if (!xpathctx)
-        goto end;
-
-    if (m_bForceKill)
-        goto end;
-
-    // parser manifest
+    for (xmlNodePtr node = manifest->children; node; node = node->next)
     {
-        xpath = BAD_CAST("//*[local-name()='item']/@*[name()='id' or name()='href' or name()='media-type']");
-        xpathobj = xmlXPathEvalExpression(xpath, xpathctx);
-        if (!xpathobj)
-            goto end;
-
-        if (xmlXPathNodeSetIsEmpty(xpathobj->nodesetval))
-            goto end;
-
-        nodeset = xpathobj->nodesetval;
-        for (i = 0; i < nodeset->nodeNr; /*i++*/)
+        if (node->type != XML_ELEMENT_NODE || !xmlStrEqual(node->name, BAD_CAST "item"))
+            continue;
+        manifest_t *item = new manifest_t;
+        item->id = MobiProperty(node, "id");
+        item->href = MobiHref(MobiProperty(node, "href"));
+        item->media_type = MobiProperty(node, "media-type");
+        if (item->id.empty() || item->href.empty() || item->media_type.empty() ||
+            !mobi.manifests.insert(std::make_pair(item->id, item)).second)
         {
-            item = new manifest_t;
-            if (!item)
-                goto end;
-            for (j = 0; j < 3 && i < nodeset->nodeNr; j++, i++)
-            {
-                keyword = xmlNodeGetContent(nodeset->nodeTab[i]);
-                if (keyword && keyword[0])
-                {
-                    if (xmlStrcmp(nodeset->nodeTab[i]->name, (const xmlChar *)"id") == 0)
-                    {
-                        item->id = (const char *)keyword;
-                    }
-                    else if (xmlStrcmp(nodeset->nodeTab[i]->name, (const xmlChar *)"href") == 0)
-                    {
-                        url_decode((const char *)keyword, buff);
-                        item->href = (const char *)buff;
-                    }
-                    else if (xmlStrcmp(nodeset->nodeTab[i]->name, (const xmlChar *)"media-type") == 0)
-                    {
-                        item->media_type = (const char *)keyword;
-                    }
-                }
-                if (keyword)
-                    xmlFree(keyword);
-                if (m_bForceKill)
-                {
-                    delete item;
-                    goto end;
-                }
-            }
-            if (!item->id.empty() && !item->href.empty() && !item->media_type.empty())
-            {
-                mobi.manifests.insert(std::make_pair(item->id, item));
-            }
-            else
-            {
-                delete item;
-                goto end;
-            }
-        }
-
-        if (mobi.manifests.empty())
+            delete item;
             goto end;
-
-        if (xpathobj)
-            xmlXPathFreeObject(xpathobj);
+        }
+        if (m_bForceKill)
+            goto end;
     }
-    
-    if (m_bForceKill)
-        goto end;
-
-    // parser spine
+    for (xmlNodePtr node = spine->children; node; node = node->next)
     {
-        xpath = BAD_CAST("//*[local-name()='itemref']/@idref");
-        xpathobj = xmlXPathEvalExpression(xpath, xpathctx);
-        if (!xpathobj)
+        if (node->type != XML_ELEMENT_NODE || !xmlStrEqual(node->name, BAD_CAST "itemref"))
+            continue;
+        std::string id = MobiProperty(node, "idref");
+        if (mobi.manifests.find(id) == mobi.manifests.end())
             goto end;
-
-        if (xmlXPathNodeSetIsEmpty(xpathobj->nodesetval))
+        mobi.spines.push_back(id);
+        if (m_bForceKill)
             goto end;
-
-        nodeset = xpathobj->nodesetval;
-        for (i = 0; i < nodeset->nodeNr; i++)
-        {
-            keyword = xmlNodeGetContent(nodeset->nodeTab[i]);
-            if (keyword && keyword[0])
-            {
-                if (mobi.manifests.find((const char *)keyword) == mobi.manifests.end())
-                {
-                    xmlFree(keyword);
-                    goto end;
-                }
-                mobi.spines.push_back((const char *)keyword);
-            }
-            if (keyword)
-                xmlFree(keyword);
-            if (m_bForceKill)
-                goto end;
-        }
-
-        if (mobi.spines.empty())
-            goto end;
-
-        if (xpathobj)
-            xmlXPathFreeObject(xpathobj);
     }
-
+    if (mobi.spines.empty())
+        goto end;
+    {
+        manifests_t::iterator toc = mobi.manifests.find(MobiProperty(spine, "toc"));
+        if (toc != mobi.manifests.end())
+            mobi.ncx = toc->second->href;
+    }
     ret = TRUE;
-
-    if (m_bForceKill)
-    {
-        ret = FALSE;
-        goto end;
-    }
-
-    // parser ncx, ncx is not a required file
-    {
-        xpath = BAD_CAST("//*[local-name()='spine']/@toc");
-        xpathobj = xmlXPathEvalExpression(xpath, xpathctx);
-        if (!xpathobj)
-            goto end;
-
-        if (xmlXPathNodeSetIsEmpty(xpathobj->nodesetval))
-            goto end;
-
-        nodeset = xpathobj->nodesetval;
-        for (i = 0; i < nodeset->nodeNr; i++)
-        {
-            keyword = xmlNodeGetContent(nodeset->nodeTab[i]);
-            if (keyword && keyword[0])
-            {
-                it = mobi.manifests.find((const char *)keyword);
-                if (it == mobi.manifests.end())
-                {
-                    xmlFree(keyword);
-                    mobi.ncx = "";
-                    break;
-                }
-                mobi.ncx = it->second->href;
-                break;
-            }
-            if (keyword)
-                xmlFree(keyword);
-        }
-    }
-
 end:
-    if (xpathobj)
-        xmlXPathFreeObject(xpathobj);
-    if (xpathctx)
-        xmlXPathFreeContext(xpathctx);
-    if (doc)
-        xmlFreeDoc(doc);
-
+    xmlFreeDoc(doc);
     return ret;
 }
 
 BOOL MobiBook::ParserNcx(mobi_t &mobi)
 {
-    filelist_t::iterator itor;
-    xmlDocPtr doc = NULL;
-    xmlNodePtr node;
-    xmlChar *order, *id, *text, *src;
-    const xmlChar *xpath = NULL;
-    xmlXPathContextPtr xpathctx = NULL;
-    xmlXPathObjectPtr xpathobj = NULL;
-    xmlNodeSetPtr nodeset;
-    navpoint_t *navp = NULL;
-    int i;
-    BOOL ret = FALSE;
-    int flag = 0;
-    char buff[1024];
-    int nav_cnt = 0;
-
-    // not exist ncx
-    if (mobi.ncx.empty())
+    if (m_bForceKill)
+        return FALSE;
+    // NCX is optional. Reading order still comes from the OPF spine if a TOC
+    // is absent or unusable; it must not prevent an otherwise valid KF8 book.
+    filelist_t::iterator file = m_flist.find(mobi.path + mobi.ncx);
+    if (mobi.ncx.empty() || file == m_flist.end())
         return TRUE;
-
-    itor = m_flist.find(mobi.path+mobi.ncx);
-    if (itor == m_flist.end())
-        goto end;
-
-    doc = xmlReadMemory((const char *)itor->second.data, itor->second.size, NULL, NULL, XML_PARSE_RECOVER | XML_PARSE_NOBLANKS);
+    xmlDocPtr doc = xmlReadMemory((const char *)file->second.data, file->second.size,
+        NULL, NULL, XML_PARSE_NONET | XML_PARSE_NOBLANKS);
     if (!doc)
-        goto end;
-
-    if (m_bForceKill)
-        goto end;
-
-    xpathctx = xmlXPathNewContext(doc);
-    if (!xpathctx)
-        goto end;
-
-    if (m_bForceKill)
-        goto end;
-
-    xpath = BAD_CAST("//*[local-name()='navPoint']");
-    xpathobj = xmlXPathEvalExpression(xpath, xpathctx);
-    if (!xpathobj)
-        goto end;
-
-    if (xmlXPathNodeSetIsEmpty(xpathobj->nodesetval))
-        goto end;
-
-    nodeset = xpathobj->nodesetval;
-    for (i = 0; i < nodeset->nodeNr; i++)
-    {
-        src = NULL;
-        text = NULL;
-        node = nodeset->nodeTab[i];
-        id = xmlGetProp(node, BAD_CAST"id");
-        order = xmlGetProp(node, BAD_CAST"playOrder");
-        //text = xmlNodeGetContent(node);
-        node = node->children;
-        flag = 0;
-        while (node)
-        {
-            if (xmlStrcasecmp(node->name, BAD_CAST"content") == 0)
-            {
-                src = xmlGetProp(node, BAD_CAST"src");
-                flag++;
-            }
-            if (xmlStrcasecmp(node->name, BAD_CAST"navLabel") == 0)
-            {
-                text = xmlNodeGetContent(node->children);
-                flag++;
-            }
-            if (flag >= 2)
-                break;
-            node = node->next;
-        }
-
-#if 0 // do not check this
-        if (!id || !order || !text || !src
-            || !id[0] || !order[0] || !text[0] || !src[0])
-        {
-            if (id)
-                xmlFree(id);
-            if (order)
-                xmlFree(order);
-            if (text)
-                xmlFree(text);
-            if (src)
-                xmlFree(src);
-            goto end;
-        }
-#endif
-
-        navp = new navpoint_t;
-        if (id)
-            navp->id = (const char *)id;
-        if (order)
-            navp->order = atoi((const char *)order);
-        if (text)
-            navp->text = (const char *)text;
-        if (src)
-        {
-            url_decode((const char *)src, buff);
-            navp->src = (const char *)buff;
-        }
-        mobi.navpoints.insert(std::make_pair(navp->src, navp));
-        nav_cnt++;
-
-        if (id)
-            xmlFree(id);
-        if (order)
-            xmlFree(order);
-        if (text)
-            xmlFree(text);
-        if (src)
-            xmlFree(src);
-        if (m_bForceKill)
-            goto end;
-    }
-
-    if (!mobi.navpoints.empty())
-    {
-        ret = TRUE;
-    }
-
-    if (nav_cnt != mobi.navpoints.size())   //意味着src出现了重复，目录不可靠
-    {
-        mobi.navpoints.clear();
-    }
-
-end:
-    if (xpathobj)
-        xmlXPathFreeObject(xpathobj);
-    if (xpathctx)
-        xmlXPathFreeContext(xpathctx);
-    if (doc)
-        xmlFreeDoc(doc);
-    return ret;
+        return TRUE;
+    int order = 0;
+    MobiNavPoints(MobiChild(xmlDocGetRootElement(doc), "navMap"), mobi.navpoints, order);
+    xmlFreeDoc(doc);
+    return !m_bForceKill;
 }
 
-BOOL MobiBook::ParserOps(file_data_t *fdata, wchar_t **text, int *len, wchar_t **title, int *tlen, BOOL parsertitle)
+namespace
 {
-    filelist_t::iterator itor;
-    xmlDocPtr doc = NULL;
-    xmlChar *value;
-    const xmlChar *xpath = NULL;
-    xmlXPathContextPtr xpathctx = NULL;
-    xmlXPathObjectPtr xpathobj = NULL;
-    xmlNodeSetPtr nodeset;
-    int i;
-    BOOL ret = FALSE;
-    xmlChar *format_str = NULL;
-    int size;
-
-    xmlKeepBlanksDefault(0);
-    doc = htmlReadMemory((const char *)fdata->data, fdata->size, NULL, NULL, XML_PARSE_RECOVER | XML_PARSE_NOBLANKS);
-    if (!doc)
-        goto end;
-
-    if (m_bForceKill)
-        goto end;
-
-#if 1
-    
-    htmlDocDumpMemoryFormat(doc, &format_str, &size, 1);
-    xmlFreeDoc(doc);
-    if (!format_str || size <= 0)
+int MobiUtf16Length(const xmlChar *text)
+{
+    int length = 0;
+    for (const xmlChar *p = text; p && *p; ++p)
     {
-        if (format_str)
-            xmlFree(format_str);
-        goto end;
+        if ((*p & 0xc0) != 0x80)
+            length += *p >= 0xf0 ? 2 : 1;
     }
-    
-    xmlKeepBlanksDefault(1);
-    // htmlDocDumpMemoryFormat can emit HTML named entities. The XML parser only
-    // understands XML's predefined entities and would silently lose others.
-    doc = htmlReadMemory((const char *)format_str, size, NULL, NULL, HTML_PARSE_RECOVER);
-    xmlFree(format_str);
-    if (!doc)
-        goto end;
-#endif
-    
-    xpathctx = xmlXPathNewContext(doc);
-    if (!xpathctx)
-        goto end;
+    return length;
+}
 
-    if (m_bForceKill)
-        goto end;
-
-    if (parsertitle)
+void MobiAnchors(xmlNodePtr node, int &offset, std::map<std::string, int> &anchors)
+{
+    if (node->type == XML_TEXT_NODE || node->type == XML_CDATA_SECTION_NODE ||
+        node->type == XML_ENTITY_REF_NODE)
     {
-        // parser title
-        xpath = BAD_CAST("//*[local-name()='title']");
-        xpathobj = xmlXPathEvalExpression(xpath, xpathctx);
-        if (!xpathobj)
-            goto body;
+        xmlChar *value = xmlNodeGetContent(node);
+        offset += MobiUtf16Length(value);
+        xmlFree(value);
+        return;
+    }
+    if (node->type != XML_ELEMENT_NODE)
+        return;
+    const char *names[] = { "id", "name" };
+    for (size_t i = 0; i < ARRAYSIZE(names); ++i)
+    {
+        std::map<std::string, int>::iterator anchor = anchors.find(MobiProperty(node, names[i]));
+        if (anchor != anchors.end() && anchor->second < 0)
+            anchor->second = offset;
+    }
+    for (xmlNodePtr child = node->children; child; child = child->next)
+        MobiAnchors(child, offset, anchors);
+}
 
-        if (xmlXPathNodeSetIsEmpty(xpathobj->nodesetval))
-            goto body;
+bool MobiIndentBlank(wchar_t value)
+{
+    return value == 0x20 || value == 0x09 || value == 0x0b || value == 0x0c ||
+        value == 0x3000 || value == 0xa0;
+}
 
-        nodeset = xpathobj->nodesetval;
-        for (i = 0; i < nodeset->nodeNr; i++)
+void MobiFormattedAnchors(const wchar_t *raw, int rawlen, const wchar_t *text, int len,
+    std::map<std::string, int> &anchors)
+{
+    std::vector<std::pair<int, std::string> > offsets;
+    for (std::map<std::string, int>::iterator it = anchors.begin(); it != anchors.end(); ++it)
+        if (it->second >= 0)
+            offsets.push_back(std::make_pair(it->second, it->first));
+    std::sort(offsets.begin(), offsets.end());
+    // Book::FormatText removes whitespace (including CR in CRLF) and may
+    // normalize mixed/NBSP indentation to spaces. Align equivalent blanks so
+    // destinations survive both operations, without guessing from TOC labels
+    // or treating KF8 IDs as numbers.
+    int source = 0, target = 0;
+    for (size_t i = 0; i < offsets.size(); ++i)
+    {
+        while (source < rawlen && source < offsets[i].first)
         {
-            value = xmlNodeGetContent(nodeset->nodeTab[i]);
+            if (target < len && (raw[source] == text[target] ||
+                (MobiIndentBlank(raw[source]) && MobiIndentBlank(text[target]))))
+                ++target;
+            ++source;
+        }
+        anchors[offsets[i].second] = target;
+    }
+}
+}
 
-            if (!DecodeText((const char *)value, (int)strlen((const char *)value), title, tlen))
+BOOL MobiBook::ParserOps(file_data_t *fdata, wchar_t **text, int *len, wchar_t **title,
+    int *tlen, BOOL parsertitle, std::map<std::string, int> *anchors)
+{
+    *text = NULL;
+    *title = NULL;
+    *len = *tlen = 0;
+    if (!fdata || !fdata->data || fdata->size <= 0 || m_bForceKill)
+        return FALSE;
+
+    // libmobi normalizes legacy CP1252 and KF8 markup to UTF-8. Old charset
+    // declarations (or no meta tag) must not reinterpret those bytes as Latin1.
+    xmlDocPtr doc = htmlReadMemory((const char *)fdata->data, fdata->size, NULL, "UTF-8",
+        HTML_PARSE_RECOVER | HTML_PARSE_NOBLANKS | HTML_PARSE_NONET);
+    if (!doc)
+        return FALSE;
+    // Preserve the existing text-oriented renderer's paragraph formatting.
+    xmlChar *formatted = NULL;
+    int size = 0;
+    htmlDocDumpMemoryFormat(doc, &formatted, &size, 1);
+    xmlFreeDoc(doc);
+    if (!formatted || size <= 0)
+    {
+        xmlFree(formatted);
+        return FALSE;
+    }
+    // Reparse as HTML, not XML: named HTML entities must retain their text.
+    doc = htmlReadMemory((const char *)formatted, size, NULL, "UTF-8",
+        HTML_PARSE_RECOVER | HTML_PARSE_NONET);
+    xmlFree(formatted);
+    if (!doc)
+        return FALSE;
+
+    BOOL ret = FALSE;
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+    xmlNodePtr body = MobiChild(root, "body");
+    if (body && !m_bForceKill)
+    {
+        if (parsertitle)
+        {
+            xmlNodePtr titleNode = MobiChild(MobiChild(root, "head"), "title");
+            xmlChar *value = titleNode ? xmlNodeGetContent(titleNode) : NULL;
+            if (value && *value)
+                DecodeText((const char *)value, xmlStrlen(value), title, tlen);
+            xmlFree(value);
+        }
+        xmlChar *value = xmlNodeGetContent(body);
+        if (value)
+        {
+            ret = DecodeText((const char *)value, xmlStrlen(value), text, len);
+            if (ret && anchors && !anchors->empty())
             {
-                xmlFree(value);
-                break;
+                int offset = 0, rawlen = 0;
+                MobiAnchors(body, offset, *anchors);
+                wchar_t *raw = utf8_to_utf16((const char *)value, xmlStrlen(value), &rawlen);
+                if (raw)
+                {
+                    MobiFormattedAnchors(raw, rawlen, *text, *len, *anchors);
+                    free(raw);
+                }
+                else
+                    ret = FALSE;
             }
             xmlFree(value);
-            break;
         }
     }
-
-    if (m_bForceKill)
-        goto end;
-
-body:
-    if (xpathobj)
-        xmlXPathFreeObject(xpathobj);
-    {
-        // parser body
-        xpath = BAD_CAST("//*[local-name()='body']");
-        xpathobj = xmlXPathEvalExpression(xpath, xpathctx);
-        if (!xpathobj)
-            goto end;
-
-        if (xmlXPathNodeSetIsEmpty(xpathobj->nodesetval))
-            goto end;
-
-        nodeset = xpathobj->nodesetval;
-        for (i = 0; i < nodeset->nodeNr; i++)
-        {
-            value = xmlNodeGetContent(nodeset->nodeTab[i]);
-
-            if (!DecodeText((const char *)value, (int)strlen((const char *)value), text, len))
-                ret = FALSE;
-            else
-                ret = TRUE;
-
-            xmlFree(value);
-            break;
-        }
-    }
-
-end:
-    if (xpathobj)
-        xmlXPathFreeObject(xpathobj);
-    if (xpathctx)
-        xmlXPathFreeContext(xpathctx);
-    if (doc)
-        xmlFreeDoc(doc);
-    return ret;
+    xmlFreeDoc(doc);
+    return ret && !m_bForceKill;
 }
 
 BOOL MobiBook::ParserChapters(mobi_t &mobi)
 {
-    typedef struct buffer_t
+    std::wstring document;
+    BOOL hasText = FALSE;
+    m_Chapters.clear();
+    if (GetCover())
+        document += L'\n';
+
+    for (spines_t::iterator spine = mobi.spines.begin(); spine != mobi.spines.end(); ++spine)
     {
-        wchar_t *text;
-        int len;
-    } buffer_t;
-
-    spines_t::iterator itspine;
-    filelist_t::iterator itflist;
-    manifests_t::iterator itmfest;
-    navpoints_t::iterator itnav;
-    file_data_t *fdata;
-    chapter_item_t chapter;
-    std::string filename;
-    wchar_t *text = NULL;
-    wchar_t *title = NULL;
-    int len = 0, tlen = 0;
-    int index = 0, i=0;
-    buffer_t *buffer = NULL;
-    int sepidx = 0, offsetlen = 0;
-    int spines_size = 0, nav_size = 0;
-
-    m_Length = GetCover() ? 1 : 0;
-    buffer = (buffer_t *)malloc(mobi.spines.size() * sizeof(buffer_t));
-
-    spines_size = mobi.spines.size();
-    nav_size = mobi.navpoints.size();
-
-    for (itspine = mobi.spines.begin(); itspine != mobi.spines.end(); itspine++)
-    {
-        len = 0;
-        tlen = 0;
         if (m_bForceKill)
-            goto end;
-        itmfest = mobi.manifests.find(*itspine);    //只有在spines里面的才是有文字的，manifests里面还有图片，暂时不支持
-        if (itmfest != mobi.manifests.end())
+            return FALSE;
+        manifests_t::iterator item = mobi.manifests.find(*spine);
+        if (item == mobi.manifests.end())
+            return FALSE;
+        const std::string &href = item->second->href;
+        filelist_t::iterator file = m_flist.find(mobi.path + href);
+        if (file == m_flist.end())
+            return FALSE;
+
+        std::map<std::string, int> anchors;
+        std::vector<navpoint_t *> navigation;
+        for (navpoints_t::iterator nav = mobi.navpoints.begin(); nav != mobi.navpoints.end(); ++nav)
         {
-            filename = mobi.path + itmfest->second->href;
-            itflist = m_flist.find(filename);
-            itnav = mobi.navpoints.find(itmfest->second->href);
-            if (itflist != m_flist.end() /*&& itnav != mobi.navmap.end()*/)
+            const std::string &src = nav->second->src;
+            size_t separator = src.find('#');
+            if (src.substr(0, separator) == href)
             {
-                fdata = &(itflist->second);
-                tlen = 0;
-                if (ParserOps(fdata, &text, &len, &title, &tlen, itnav == mobi.navpoints.end())) //当nav找不到对应文件时，从文件中获取章节名
-                {
-                    if (len > 0)
-                    {
-                        buffer[index].text = text;
-                        buffer[index].len = len;
-                        chapter.index = m_Length;
-                        m_Length += len;
-
-                        if (itnav != mobi.navpoints.end())  //当nav有对应文件时，从nav中获取章节名；之前ParserNCX处理了nav不可靠的情况
-                        {
-                            DecodeText(itnav->second->text.c_str(), (int)itnav->second->text.size(), &title, &tlen);
-                        }
-                        
-                        if (tlen > 0)
-                        {
-                            chapter.title = title;
-                            chapter.title_len = tlen;
-                            m_Chapters.push_back(chapter);
-                            
-                            free(title);
-                        }                        
-
-                        index++;
-                    }
-                }
+                navigation.push_back(nav->second);
+                if (separator != std::string::npos && separator + 1 < src.size())
+                    anchors[src.substr(separator + 1)] = -1;
             }
         }
-    }
+        std::sort(navigation.begin(), navigation.end(), [](const navpoint_t *a, const navpoint_t *b) {
+            return a->order < b->order;
+        });
 
-end:
-    if (m_bForceKill)
-    {
-        for (i = 0; i < index; i++)
+        wchar_t *text = NULL, *title = NULL;
+        int len = 0, tlen = 0;
+        BOOL parsed = ParserOps(&file->second, &text, &len, &title, &tlen, TRUE, &anchors);
+        if (!parsed || len < 0 || (size_t)len > (size_t)INT_MAX - document.size())
         {
-            free(buffer[i].text);
+            free(text);
+            free(title);
+            return FALSE;
         }
-        free(buffer);
-        return FALSE;
-    }
-    if (index > 0)
-    {
-        if (GetCover())
+        if (len > 0)
         {
-            len = 1; // add one wchar_t '0x0a' new line for cover
-            m_Text = (wchar_t *)malloc(sizeof(wchar_t) * (m_Length + 1));
-            m_Text[0] = 0x0A;
-        }
-        else
-        {
-            len = 0;
-            m_Text = (wchar_t *)malloc(sizeof(wchar_t) * (m_Length + 1));
-        }
-        m_Text[m_Length] = 0;
-        
-        for (i = 0; i < index; i++)
-        {
-            memcpy(m_Text + len, buffer[i].text, buffer[i].len * sizeof(wchar_t));
-            len += buffer[i].len;
-            free(buffer[i].text);
-        }
-        
-        if (spines_size == 1) //spines_size=1的情况即只有一个part，以nav信息生成目录，从内容中直接找目录字符串，来匹配位置，不一定准确
-        {
-            std::vector<int> navidx;
-            std::wstring buff = m_Text;
-            itflist = m_flist.find(mobi.path + mobi.manifests.find(mobi.spines.front())->second->href);
-            int total_size = itflist->second.size;
-            float idx_ratio = float(len) / float(total_size);
-                
-            for (itnav = mobi.navpoints.begin(); itnav != mobi.navpoints.end(); itnav++)
+            hasText = TRUE;
+            int start = (int)document.size();
+            document.append(text, len);
+            size_t chaptersBefore = m_Chapters.size();
+            for (size_t i = 0; i < navigation.size(); ++i)
             {
-                DecodeText(itnav->second->text.c_str(), (int)itnav->second->text.size(), &title, &tlen);
-
-                
-                //一个part，src经常是part00000.html#0000047473这样的形式，数字是偏移量
-                sepidx = itnav->second->src.find("#");
-                offsetlen = itnav->second->src.size();
-                int refidx = std::stoi(itnav->second->src.substr(sepidx+1, offsetlen - sepidx-1)) * idx_ratio;
-                
-                int pos = 0, idx = 0;
-                while((idx = buff.find(title, pos)) > 0)  //一般会有三次匹配，头尾都是目录，中间是正文，取第二次的位置；如果多于三次，取第三次的位置
+                const navpoint_t *nav = navigation[i];
+                wchar_t *label = NULL;
+                int labelLen = 0;
+                if (DecodeText(nav->text.c_str(), (int)nav->text.size(), &label, &labelLen) && labelLen > 0)
                 {
-                    navidx.push_back(idx);
-                    pos = idx + tlen;
-                    if (navidx.size() >= 3)
-                        break;
-                }
-                
-                if (!navidx.empty())
-                {
-                    idx = buff.rfind(title);     //从文件尾查找一次
-
-                    if (navidx.back() != idx)   // 章节名文字出现超过三次，要猜一下哪个是章节名，哪个是文中出现的
+                    int offset = 0;
+                    size_t separator = nav->src.find('#');
+                    if (separator != std::string::npos && separator + 1 < nav->src.size())
                     {
-                        if (refidx > navidx[1])
-                        {
-                            chapter.index = navidx.at(((navidx[1] - navidx[0]) > (navidx[2] - navidx[1])
-                                                || (navidx[2] > refidx)) ? 1 : 2);
-                        }
+                        std::map<std::string, int>::iterator anchor = anchors.find(nav->src.substr(separator + 1));
+                        if (anchor != anchors.end() && anchor->second >= 0)
+                            offset = anchor->second;
                         else
                         {
-                            chapter.index = refidx;
+                            // Damaged/legacy filepos links: a label match is a
+                            // safe fallback. Never parse a KF8 anchor with stoi.
+                            size_t match = std::wstring(text, len).find(label);
+                            if (match != std::wstring::npos)
+                                offset = (int)match;
                         }
                     }
-                    else
-                    {
-                        chapter.index = navidx.at((navidx.size() > 2) ? 1 : 0);     //三次取中间，两次一次取第一个
-                    }
-                        
-
-                    chapter.title_len = tlen;
-                    chapter.title = title;                    
+                    chapter_item_t chapter = {};
+                    chapter.index = start + (offset < len ? offset : len - 1);
+                    chapter.title.assign(label, labelLen);
+                    chapter.title_len = labelLen;
                     m_Chapters.push_back(chapter);
-                    navidx.clear();
                 }
+                free(label);
             }
-        }        
-        
+            if (chaptersBefore == m_Chapters.size() && tlen > 0)
+            {
+                chapter_item_t chapter = {};
+                chapter.index = start;
+                chapter.title.assign(title, tlen);
+                chapter.title_len = tlen;
+                m_Chapters.push_back(chapter);
+            }
+        }
+        free(text);
+        free(title);
     }
-    free(buffer);
+    if (!hasText || m_bForceKill)
+        return FALSE;
+
+    // Nested NCX entries may be unordered; chapter jumps require text order.
+    std::stable_sort(m_Chapters.begin(), m_Chapters.end(), [](const chapter_item_t &a, const chapter_item_t &b) {
+        return a.index < b.index;
+    });
+    if (document.size() >= SIZE_MAX / sizeof(wchar_t))
+        return FALSE;
+    wchar_t *text = (wchar_t *)malloc((document.size() + 1) * sizeof(wchar_t));
+    if (!text)
+        return FALSE;
+    memcpy(text, document.c_str(), (document.size() + 1) * sizeof(wchar_t));
+    free(m_Text);
+    m_Text = text;
+    m_Length = (int)document.size();
     return TRUE;
 }
 
 BOOL MobiBook::ParserCover(mobi_t &mobi, MOBIData *m)
 {
-    MOBIPdbRecord *record = NULL;
+    delete m_Cover;
+    m_Cover = NULL;
+    if (m_CoverStream)
+    {
+        m_CoverStream->Release();
+        m_CoverStream = NULL;
+    }
+
     MOBIExthHeader *exth = mobi_get_exthrecord_by_tag(m, EXTH_COVEROFFSET);
+    if (!exth || !exth->data || exth->size != sizeof(uint32_t))
+        return FALSE;
+    size_t first = mobi_get_first_resource_record(m);
+    uint32_t offset = mobi_decode_exthvalue((unsigned char *)exth->data, exth->size);
+    if (first == MOBI_NOTSET || offset == MOBI_NOTSET || first > SIZE_MAX - offset)
+        return FALSE;
+    MOBIPdbRecord *record = mobi_get_record_by_seqnumber(m, first + offset);
+    if (!record || !record->data || record->size < 4 || record->size > UINT_MAX)
+        return FALSE;
 
-
-    filelist_t::iterator itflist;
-    manifests_t::iterator itmfest;
-    navpoints_t::iterator itnav;
-
-    IStream *pStream = NULL;
-    const char *cover_fname = NULL;
-    char image_fname[1024] = {0};
-
-    if (m_Cover)
+    IStream *stream = SHCreateMemStream((const BYTE *)record->data, (UINT)record->size);
+    if (!stream)
+        return FALSE;
+    m_Cover = new Gdiplus::Bitmap(stream);
+    if (!m_Cover || m_Cover->GetLastStatus() != Gdiplus::Ok)
     {
         delete m_Cover;
         m_Cover = NULL;
-    }
-
-    if (exth) {
-        uint32_t offset = mobi_decode_exthvalue((unsigned char*)exth->data, exth->size);
-        size_t first_resource = mobi_get_first_resource_record(m);
-        size_t uid = first_resource + offset;
-        record = mobi_get_record_by_seqnumber(m, uid);
-    }
-    if (record == NULL || record->size < 4) {
-        printf("Cover not found\n");
+        stream->Release();
         return FALSE;
     }
-
-    const unsigned char jpg_magic[] = "\xff\xd8\xff";
-    const unsigned char gif_magic[] = "\x47\x49\x46\x38";
-    const unsigned char png_magic[] = "\x89\x50\x4e\x47\x0d\x0a\x1a\x0a";
-    const unsigned char bmp_magic[] = "\x42\x4d";
-    
-    char ext[4] = "raw";
-    if (memcmp(record->data, jpg_magic, 3) == 0) {
-        snprintf(ext, sizeof(ext), "%s", "jpg");
-    } else if (memcmp(record->data, gif_magic, 4) == 0) {
-        snprintf(ext, sizeof(ext), "%s", "gif");
-    } else if (record->size >= 8 && memcmp(record->data, png_magic, 8) == 0) {
-        snprintf(ext, sizeof(ext), "%s", "png");
-    } else if (record->size >= 6 && memcmp(record->data, bmp_magic, 2) == 0) {
-        const size_t bmp_size = (uint32_t) record->data[2] | ((uint32_t) record->data[3] << 8) |
-        ((uint32_t) record->data[4] << 16) | ((uint32_t) record->data[5] << 24);
-        if (record->size == bmp_size) {
-            snprintf(ext, sizeof(ext), "%s", "bmp");
-        }
-    }
-    
-    pStream = SHCreateMemStream((const BYTE *)record->data, record->size);
-    m_Cover = new Gdiplus::Bitmap(pStream);
-    if (m_Cover)
-    {
-        if (Gdiplus::Ok != m_Cover->GetLastStatus())
-        {
-            delete m_Cover;
-            m_Cover = NULL;
-        }
-    }
-    pStream->Release();
-    return m_Cover != NULL;
+    // GDI+ requires its input stream to stay alive for the bitmap's lifetime.
+    // SHCreateMemStream owns a copy, independent of libmobi's freed records.
+    m_CoverStream = stream;
+    return TRUE;
 }
-
-

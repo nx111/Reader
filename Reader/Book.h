@@ -79,6 +79,8 @@ public:
     virtual book_type_t GetBookType(void) = 0;
     virtual BOOL SaveBook(HWND hWnd) = 0;
     virtual BOOL UpdateChapters(int offset) = 0;
+    // Zero keeps the generic open-file error for existing book types.
+    virtual UINT GetOpenErrorMessage(void) { return 0; }
     BOOL OpenBook(HWND hWnd);
     BOOL OpenBook(char *data, int size, HWND hWnd);
     BOOL CloseBook(void);

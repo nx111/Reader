@@ -3,6 +3,7 @@ name: Build Reader package
 on:
   push:
     branches:
+      - master
       - codex/fix-security-and-stability
   workflow_dispatch:
 

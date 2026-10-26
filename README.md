@@ -1,5 +1,13 @@
 # Reader
-A win32 txt/epub/online file reader  
+A Win32 text, EPUB, Mobipocket/Kindle and online file reader
+
+## 本地电子书格式支持
+- 支持 TXT、EPUB，以及现有 libmobi 可解析的无 DRM MOBI / KF8 容器：`.mobi`、`.azw3`、`.azw`、`.prc`。
+- `.pdb` 仅支持 libmobi 可解析的 PalmDoc 文本电子书，不支持任意 Palm 数据库；`.prc` 也不支持 Palm 应用程序。无 MOBI 编码头的旧 PalmDoc 按 CP1252 解码，纯文本保留字面标签/实体，明确的 HTML 文档沿用 HTML 阅读方式。
+- 网络版还保留 `.ol`、`.web` 在线书籍配置；无网络版不提供这两种入口。
+- 上述格式均可通过打开文件对话框、拖拽、命令行或历史记录打开；扩展名大小写不敏感（如 `.AZW3`、`.PRC`）。
+- 正文、目录和封面使用 Reader 现有的文本阅读方式，不保留完整 HTML/CSS 排版。
+- 不支持 DRM 加密书籍、KFX、AZW4 / Print Replica、Topaz、PDF、CBZ 或 FB2；修改扩展名不能转换文件格式。
 
 最新release版本：　`v2.0.0.4`
 版本描述  | 下载地址

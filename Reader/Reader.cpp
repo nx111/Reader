@@ -56,6 +56,36 @@ INT_PTR CALLBACK    UpgradeProc(HWND, UINT, WPARAM, LPARAM);
 static void _free_resource(HWND hWnd);
 static void _update_data(HWND hWnd, BOOL keep_header, BOOL do_save);
 
+// Only containers supported by libmobi: MOBI/KF8 and PalmDoc text (not KFX,
+// Topaz, Print Replica or arbitrary Palm databases/programs).
+static BOOL IsMobiBookExtension(const TCHAR *ext)
+{
+    if (ext == NULL || *ext == 0)
+        return FALSE;
+
+    return _tcsicmp(ext, _T(".mobi")) == 0
+        || _tcsicmp(ext, _T(".azw3")) == 0
+        || _tcsicmp(ext, _T(".azw")) == 0
+        || _tcsicmp(ext, _T(".prc")) == 0
+        || _tcsicmp(ext, _T(".pdb")) == 0;
+}
+
+// Keep file validation and drag-and-drop in sync, including networkless builds.
+static BOOL IsSupportedBookExtension(const TCHAR *ext)
+{
+    if (ext == NULL || *ext == 0)
+        return FALSE;
+
+    return _tcsicmp(ext, _T(".txt")) == 0
+        || _tcsicmp(ext, _T(".epub")) == 0
+        || IsMobiBookExtension(ext)
+#ifdef ENABLE_NETWORK
+        || _tcsicmp(ext, _T(".ol")) == 0
+        || _tcsicmp(ext, _T(".web")) == 0
+#endif
+        ;
+}
+
 
 int APIENTRY _tWinMain(HINSTANCE hInstance,
                      HINSTANCE hPrevInstance,
@@ -1934,7 +1964,7 @@ LRESULT OnUpdateMenu(HWND hWnd)
         item_t* item = _Cache.get_item(i);
         AppendMenu(hFile, MF_STRING, (UINT_PTR)menu_begin_id, item->file_name);
 #ifdef ENABLE_NETWORK
-        if (0 == _tcscmp(PathFindExtension(item->file_name), _T(".ol")) && item->is_new)
+        if (0 == _tcsicmp(PathFindExtension(item->file_name), _T(".ol")) && item->is_new)
         {
             SetMenuItemBitmaps(hFile, menu_begin_id, MF_BITMAP, hBitmap, hBitmap);
         }
@@ -2516,7 +2546,11 @@ LRESULT OnOpenFile(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     OPENFILENAME ofn = {0};
     ofn.lStructSize = sizeof(ofn);  
     ofn.hwndOwner = hWnd;  
-    ofn.lpstrFilter = _T("Files (*.txt;*.epub;*.mobi;*.ol;*.web)\0*.txt;*.epub;*.mobi;*.ol;*.web\0\0");
+#ifdef ENABLE_NETWORK
+    ofn.lpstrFilter = _T("Files (*.txt;*.epub;*.mobi;*.azw3;*.azw;*.prc;*.pdb;*.ol;*.web)\0*.txt;*.epub;*.mobi;*.azw3;*.azw;*.prc;*.pdb;*.ol;*.web\0\0");
+#else
+    ofn.lpstrFilter = _T("Files (*.txt;*.epub;*.mobi;*.azw3;*.azw;*.prc;*.pdb)\0*.txt;*.epub;*.mobi;*.azw3;*.azw;*.prc;*.pdb\0\0");
+#endif
     ofn.lpstrInitialDir = NULL;
     ofn.lpstrFile = szFileName; 
     ofn.nMaxFile = sizeof(szFileName)/sizeof(*szFileName);  
@@ -2748,13 +2782,9 @@ LRESULT OnDropFiles(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             continue;
         }
 
-        // check is txt file
+        // Check the same formats accepted by dialog, command line and history.
         ext = PathFindExtension(szFileName);
-#ifdef ENABLE_NETWORK
-        if (ext && _tcscmp(ext, _T(".txt")) && _tcscmp(ext, _T(".epub")) && _tcscmp(ext, _T(".mobi")) && _tcscmp(ext, _T(".ol")) && _tcscmp(ext, _T(".web")))
-#else
-        if (ext && _tcscmp(ext, _T(".txt")) && _tcscmp(ext, _T(".epub")) && _tcscmp(ext, _T(".mobi")))
-#endif
+        if (!IsSupportedBookExtension(ext))
         {
             continue;
         }
@@ -2908,6 +2938,7 @@ LRESULT OnOpenBookResult(HWND hWnd, BOOL result)
 {
     item_t *item = NULL;
     UINT type;
+    UINT errorMessage;
     TCHAR fileName[MAX_PATH] = { 0 };
     
     //EnableWindow(hWnd, TRUE);
@@ -2916,9 +2947,13 @@ LRESULT OnOpenBookResult(HWND hWnd, BOOL result)
         StopLoadingImage(hWnd);
         _tcscpy(fileName, _Book->GetFileName());
         type = (_Book->GetBookType() == book_online || _Book->GetBookType() == book_web) ? MB_RETRYCANCEL : MB_OK;
+        // Read parser-specific errors before destroying the failed book.
+        errorMessage = _Book->GetOpenErrorMessage();
+        if (errorMessage == 0)
+            errorMessage = IDS_OPEN_FILE_FAILED;
         delete _Book;
         _Book = NULL;
-        if (IDRETRY == MessageBox_(hWnd, IDS_OPEN_FILE_FAILED, IDS_ERROR, type | MB_ICONERROR))
+        if (IDRETRY == MessageBox_(hWnd, errorMessage, IDS_ERROR, type | MB_ICONERROR))
         {
             OnOpenBook(hWnd, fileName, FALSE);
         }
@@ -3115,17 +3150,15 @@ BOOL IsVaildFile(HWND hWnd, TCHAR *filename, int *p_size)
 #ifdef ENABLE_NETWORK
     if (!_header || _header->book_source_count == 0)
     {
-        if (0 == _tcscmp(ext, _T(".ol")))
+        if (0 == _tcsicmp(ext, _T(".ol")))
         {
             if (hWnd)
                 MessageBox_(hWnd, IDS_NO_BOOKSOURCE_FAIL, IDS_ERROR, MB_OK | MB_ICONERROR);
             return FALSE;
         }
     }
-    if (_tcscmp(ext, _T(".txt")) && _tcscmp(ext, _T(".epub")) && _tcscmp(ext, _T(".mobi")) && _tcscmp(ext, _T(".ol")) && _tcscmp(ext, _T(".web")))
-#else
-    if (_tcscmp(ext, _T(".txt")) && _tcscmp(ext, _T(".epub")) && _tcscmp(ext, _T(".mobi")))
 #endif
+    if (!IsSupportedBookExtension(ext))
     {
         if (hWnd)
             MessageBox_(hWnd, IDS_UNKNOWN_FORMAT, IDS_ERROR, MB_OK | MB_ICONERROR);
@@ -3193,27 +3226,28 @@ void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
         _Book = NULL;
     }
 
-    if (_tcscmp(ext, _T(".txt")) == 0)
+    if (_tcsicmp(ext, _T(".txt")) == 0)
     {
         _Book = new TextBook;
         _Book->SetFileName(szFileName);
         _Book->SetChapterRule(&(_header->chapter_rule));
         _Book->OpenBook(NULL, size, hWnd);
     }
-    else if (_tcscmp(ext, _T(".epub")) == 0)
+    else if (_tcsicmp(ext, _T(".epub")) == 0)
     {
         _Book = new EpubBook;
         _Book->SetFileName(szFileName);
         _Book->OpenBook(hWnd);
     }
-    else if (_tcscmp(ext, _T(".mobi")) == 0)
+    // All libmobi aliases share the same validation and parser dispatch.
+    else if (IsMobiBookExtension(ext))
     {
         _Book = new MobiBook;
         _Book->SetFileName(szFileName);
         _Book->OpenBook(hWnd);
     }
 #ifdef ENABLE_NETWORK
-    else if (_tcscmp(ext, _T(".ol")) == 0)
+    else if (_tcsicmp(ext, _T(".ol")) == 0)
     {
         arg = GetCheckBookArguments();
         if (arg && arg->book && arg->book->GetBookType() == book_online
@@ -3227,7 +3261,7 @@ void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
         _Book->SetFileName(szFileName);
         _Book->OpenBook(NULL, size, hWnd);
     }
-    else if (_tcscmp(ext, _T(".web")) == 0)
+    else if (_tcsicmp(ext, _T(".web")) == 0)
     {
         _Book = new WebBook;
         _Book->SetFileName(szFileName);
@@ -3976,7 +4010,7 @@ _check_next:
     for (i = 0; i < _header->item_count; i++)
     {
         item = _Cache.get_item(i);
-        if (0 == _tcscmp(PathFindExtension(item->file_name), _T(".ol")))
+        if (0 == _tcsicmp(PathFindExtension(item->file_name), _T(".ol")))
         {
             if (arg->checked_list.find(item->file_name) != arg->checked_list.end())
             {
