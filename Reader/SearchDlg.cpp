@@ -1,4 +1,5 @@
 #include "Theme.h"
+#include "ReaderInteraction.h"
 #include "SearchDlg.h"
 #include "DPIAwareness.h"
 #include <commctrl.h>
@@ -142,7 +143,7 @@ LRESULT DrawHit(NMLVCUSTOMDRAW* draw)
     HBRUSH background = CreateSolidBrush(selected ? ThemeColors().selected : ThemeColors().surface);
     FillRect(dc, &rc, background); DeleteObject(background);
     SetBkMode(dc, TRANSPARENT); SelectObject(dc, font);
-    int x = rc.left + Scale(4);
+    int x = rc.left + ReaderItemInset(rc.right-rc.left,dpi);
     std::wstring parts[] = { excerpt.text.substr(0, excerpt.matchStart), excerpt.text.substr(excerpt.matchStart, excerpt.matchLength), excerpt.text.substr(excerpt.matchStart + excerpt.matchLength) };
     for (int i = 0; i < 3; ++i)
     {
@@ -156,6 +157,7 @@ LRESULT DrawHit(NMLVCUSTOMDRAW* draw)
         TextOut(dc, x, rc.top + ((rc.bottom - rc.top - size.cy) / 2), parts[i].c_str(), (int)parts[i].size());
         x += size.cx;
     }
+    if(GetFocus()==results && (ListView_GetItemState(results,row,LVIS_FOCUSED)&LVIS_FOCUSED)) {RECT cue=rc;InflateRect(&cue,-1,-1);DrawFocusRect(dc,&cue);}
     RestoreDC(dc, saved);
     return CDRF_SKIPDEFAULT;
 }
@@ -180,6 +182,7 @@ LRESULT CALLBACK SearchProc(HWND handle, UINT message, WPARAM wParam, LPARAM lPa
             for (int i = 0; i < 5; ++i) CreateWindow(L"BUTTON", labels[i], WS_CHILD | WS_VISIBLE | WS_TABSTOP | (i == 2 ? BS_AUTOCHECKBOX : BS_PUSHBUTTON), 0, 0, 0, 0, handle, (HMENU)(INT_PTR)ids[i], NULL, NULL);
             scope = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, handle, (HMENU)scope_id, NULL, NULL);
             results = CreateWindowEx(WS_EX_CLIENTEDGE, WC_LISTVIEW, L"搜索结果", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS, 0, 0, 0, 0, handle, (HMENU)results_id, NULL, NULL);
+            SetProp(results,L"ReaderPaddedList",(HANDLE)1);
             ListView_SetExtendedListViewStyle(results, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
             const wchar_t* titles[] = { L"章节", L"匹配与上下文", L"字符位置" };
             const int widths[] = { 140, 390, 90 };

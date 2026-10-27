@@ -180,3 +180,19 @@ resource compilation uses a lossless temporary UTF-16 conversion and SDK case
 aliases. No MSVC linkage, native PowerShell or new Windows CI build was run here.
 Final package size and real Windows/DPI/transparent/flicker behavior remain untested.
 See [implementation, dependency provenance and manual checklist](../doc/left-navigation-pdf.md).
+
+## Focus exit and internal list padding (local regression)
+
+```sh
+python -m unittest discover -s tests -p 'test_focus_ui.py' -v
+```
+
+Eight additional cases bring the current suite to **89 tests**. They compile the
+production focus-state and Escape functions against small native-window stand-ins,
+including cancel priorities, repeat/release, foreign windows and 200 restore cycles.
+Geometry/palette checks cover a permanent 48-DIP rail, activation/focus/menu/capture,
+light/dark contrast and 100–200% DPI padding with narrow-column clamps. Source
+contracts preserve native text/hit/scroll bounds, local repaint and the absence of
+edge/hide timers or new whole-window opacity. All 89 pass with ASan/UBSan (LSan off).
+These are not Windows GUI, touch, screen-reader or actual DPI/flicker tests; see
+[the implementation and Windows checklist](../doc/focus-rail-padding.md).

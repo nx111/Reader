@@ -21,6 +21,7 @@
 #include "LibraryModel.h"
 #include "Theme.h"
 #include "NavigationPane.h"
+#include "ReaderInteraction.h"
 #include "BookmarkActions.h"
 #include "PdfBook.h"
 #include "GdiSurface.h"
@@ -76,6 +77,8 @@ static void PrepareReadingJump(HWND);
 static void FinishReadingJump();
 static void NavigateHistory(HWND, BOOL);
 static BOOL ReaderShortcut(MSG*);
+static BOOL ReaderFocusEscape(MSG*);
+static void SetReaderFocusMode(BOOL);
 static void NavigateBookmark(HWND, int);
 static void BookmarkAction(HWND, UINT, int);
 void InvalidateReadingText();
@@ -87,6 +90,10 @@ static BOOL _navigationAccess = FALSE, _libraryVisible = FALSE;
 static HFONT _readerUIFont = NULL;
 static WNDPROC _tocProc = NULL;
 static BOOL _panelFromFocus = FALSE;
+static ReaderFocusPanels _focusPanels;
+static BOOL _focusEscapeLatched = FALSE;
+static HIMAGELIST _treePadding = NULL;
+static int _treePaddingWidth = 0;
 static BOOL _focusMode = FALSE, _tocVisible = FALSE, _syncingToc = FALSE, _routingWheel = FALSE;
 static RECT _readingRect = {};
 static ReadingGeometry _readingGeometry = {};
@@ -357,10 +364,12 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
     // Main message loop:
     while (GetMessage(&msg, NULL, 0, 0))
     {
+        if(msg.message==WM_KEYUP && msg.wParam==VK_ESCAPE) _focusEscapeLatched=FALSE;
+        if (ReaderSearchTranslate(&msg) || ReaderFocusEscape(&msg)) continue;
         if ((msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) && !EC_IsEditMode()
             && (msg.hwnd==_hWnd || msg.hwnd==_hReadingView || ReaderNavigationContains(msg.hwnd))
             && KS_CustomKeyDownProc(_hWnd,msg.message,msg.wParam,msg.lParam)) continue;
-        if (ReaderSearchTranslate(&msg) || ReaderNavigationTranslate(&msg) || LibraryTranslateMessage(&msg) || ReaderShortcut(&msg)) continue;
+        if (ReaderNavigationTranslate(&msg) || LibraryTranslateMessage(&msg) || ReaderShortcut(&msg)) continue;
         if (!_hFindDlg || !IsDialogMessage(_hFindDlg, &msg))
         {
             if (!TranslateAccelerator(_hWnd, hAccelTable, &msg))
@@ -573,14 +582,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (ReaderNavigationSystemMenu(wParam,lParam)) return 0;
         return DefWindowProc(hWnd,message,wParam,lParam);
     case WM_ACTIVATEAPP:
-        if (!wParam) CancelReaderNavigation();
+        if (!wParam) { _focusEscapeLatched=FALSE; CancelReaderNavigation(); }
+        RefreshReaderNavigationEmphasis();PostMessage(hWnd,WM_READER_NAVIGATION_REFRESH,0,0);
         return DefWindowProc(hWnd,message,wParam,lParam);
     case WM_CANCELMODE:
         CancelReaderNavigation(); CancelSplitter(hWnd); return 0;
     case WM_READER_LIBRARY_VIEW:
         _libraryVisible = wParam != 0;
         if (_libraryVisible) PauseAutoPage(hWnd); else ResumeAutoPage(hWnd);
-        if (_libraryVisible) { _focusMode = FALSE; _tocVisible = FALSE; ShowWindow(_hTreeMark, SW_HIDE); _panelFromFocus = FALSE; }
+        if (_libraryVisible) { _focusPanels.Clear(); _focusMode = FALSE; _tocVisible = FALSE; ShowWindow(_hTreeMark, SW_HIDE); _panelFromFocus = FALSE; }
         UpdateReaderLayout(hWnd); UpdateTitle(hWnd); Invalidate(hWnd, TRUE, FALSE);
         if (!_libraryVisible) SetFocus(hWnd);
         return 0;
@@ -592,14 +602,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             info->ptMinTrackSize.x = (std::max)(info->ptMinTrackSize.x,minimum.right-minimum.left);
             info->ptMinTrackSize.y = (std::max)(info->ptMinTrackSize.y,minimum.bottom-minimum.top);
         } return 0;
+    case WM_READER_NAVIGATION_REFRESH:
+        RefreshReaderNavigationEmphasis();return 0;
     case WM_READER_NAVIGATION_ACCESS:
-        {
-            BOOL wasVisible = !_focusMode || _navigationAccess;
-            _navigationAccess = wParam != 0;
-            // Focusing an already visible menu changes only its hot/focus state.
-            if (wasVisible != (!_focusMode || _navigationAccess))
-            { UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE); }
-        } return 0;
+        _navigationAccess = wParam != 0;
+        RefreshReaderNavigationEmphasis(); return 0;
     case WM_READER_NATIVE_MENU_CLOSED:
         ReaderNavigationMenuClosed();
         if (_menuInvalid) { _menuInvalid = FALSE; OnUpdateMenu(hWnd); }
@@ -647,8 +654,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             break;
         case IDM_FOCUS:
             if (_libraryVisible) CloseLibraryView();
-            _focusMode = !_focusMode; _navigationAccess = FALSE;
-            if (_focusMode) ShowWindow(_hTreeMark, SW_HIDE);
+            SetReaderFocusMode(!(_focusMode || _panelFromFocus));
             UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE); SetFocus(hWnd);
             break;
         case IDM_CLEAR:
@@ -921,7 +927,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         GetWindowRect(hWnd, &s_rect);
         ResetAutoPage(hWnd);
         break;
+    case WM_KEYUP:
+        if (wParam==VK_ESCAPE) _focusEscapeLatched=FALSE;
+        break;
     case WM_KEYDOWN:
+        { MSG escape={};escape.hwnd=hWnd;escape.message=message;escape.wParam=wParam;escape.lParam=lParam;if(ReaderFocusEscape(&escape)) return 0; }
 #if ENABLE_GLOBAL_KEY
         if (_hKeyboardHook)
             break;
@@ -2414,14 +2424,14 @@ static void UpdateReaderLayout(HWND hWnd)
     if (!_header || !IsWindow(_hTreeView)) return;
     VisibleControl(_WndInfo.hStatusBar,_WndInfo.status==ds_normal && !_libraryVisible);
     RECT client; GetClientRectExceptStatusBar(hWnd,&client);
-    bool chrome = !_focusMode || _navigationAccess;
+    bool chrome = true; // The focus rail always reserves its own client region.
     bool marks = !_libraryVisible && IsWindowVisible(_hTreeMark), toc = !_libraryVisible && _tocVisible && !_focusMode;
     bool panel = marks || toc; UINT dpi = GetWindowDpiCompat(hWnd);
-    ReadingGeometry geometry=ComputeReadingGeometry(client.right,client.bottom,dpi,chrome,panel,_splitterDrag.Active()?_sidebarPreviewWidth:_header->sidebar_width);
+    ReadingGeometry geometry=ComputeReadingGeometry(client.right,client.bottom,dpi,chrome,panel,_splitterDrag.Active()?_sidebarPreviewWidth:_header->sidebar_width,_focusMode || _panelFromFocus);
     RECT reading={geometry.readingLeft,0,geometry.readingRight,geometry.readingBottom};
     bool changed=!EqualRect(&_readingRect,&reading) || _readingGeometry.sidebarWidth!=geometry.sidebarWidth;
     if(changed && _Book) _Book->ResetLayout(); _readingRect=reading;_readingGeometry=geometry;
-    LayoutReaderNavigation(client.right,client.bottom,chrome,panel);
+    LayoutReaderNavigation(client.right,client.bottom,chrome,panel,_focusMode || _panelFromFocus);
     int left=geometry.navigationWidth,heading=geometry.sidebarHeadingHeight;
     if(panel)
     {
@@ -2532,6 +2542,46 @@ static LRESULT CALLBACK TocProc(HWND window, UINT message, WPARAM wParam, LPARAM
     return CallWindowProc(window == _hTreeView ? _tocProc : _markProc, window, message, wParam, lParam);
 }
 
+static void SetReaderFocusMode(BOOL focus)
+{
+    if(focus)
+    {
+        if(!_focusMode && !_panelFromFocus) _focusPanels.Capture(_tocVisible!=FALSE,IsWindowVisible(_hTreeMark)!=FALSE);
+        _focusMode=TRUE;ShowWindow(_hTreeMark,SW_HIDE);
+    }
+    else
+    {
+        _focusMode=FALSE;
+        if(_focusPanels.saved)
+        { _tocVisible=_focusPanels.toc;ShowWindow(_hTreeMark,_focusPanels.marks?SW_SHOWNA:SW_HIDE); }
+        _focusPanels.Clear();
+    }
+    _panelFromFocus=FALSE;_navigationAccess=FALSE;
+}
+
+static BOOL ReaderFocusEscape(MSG* message)
+{
+    if(message->wParam!=VK_ESCAPE) return FALSE;
+    if(message->hwnd!=_hWnd && !IsChild(_hWnd,message->hwnd)) return FALSE;
+    if(message->message==WM_KEYUP) { _focusEscapeLatched=FALSE;return FALSE; }
+    if(message->message!=WM_KEYDOWN || (GetKeyState(VK_CONTROL)&0x8000) || (GetKeyState(VK_MENU)&0x8000)) return FALSE;
+    if(_focusEscapeLatched) return TRUE; // Holding Esc must not exit focus and then hide the app.
+    if(!(_focusMode || _panelFromFocus || EC_IsEditMode() || _splitterDrag.Active() || ReaderNavigationKeyboardActive()) || ReaderNavigationTracking()) return FALSE;
+    auto action=ReaderEscapePriority(!IsWindowEnabled(_hWnd),EC_IsEditMode()!=FALSE,_splitterDrag.Active(),_panelFromFocus!=FALSE,ReaderNavigationKeyboardActive()!=FALSE,_focusMode!=FALSE);
+    if(action==reader_escape_none) return FALSE;
+    _focusEscapeLatched=TRUE;
+    switch(action)
+    {
+    case reader_escape_drag:CancelSplitter(_hWnd);break;
+    case reader_escape_edit:EC_LeaveEditMode();if(!(GetAsyncKeyState(VK_ESCAPE)&0x8000)) _focusEscapeLatched=FALSE;break;
+    case reader_escape_panel:CloseToc(_hWnd);break;
+    case reader_escape_navigation:LeaveReaderNavigation();break;
+    case reader_escape_focus:SetReaderFocusMode(FALSE);UpdateReaderLayout(_hWnd);Invalidate(_hWnd,TRUE,FALSE);SetFocus(_hWnd);break;
+    default:break;
+    }
+    return TRUE;
+}
+
 static BOOL ReaderShortcut(MSG* message)
 {
     if (message->hwnd != _hWnd && !IsChild(_hWnd, message->hwnd)) return FALSE;
@@ -2557,7 +2607,7 @@ static BOOL ReaderShortcut(MSG* message)
     {
         CloseToc(_hWnd); return TRUE;
     }
-    if (message->wParam == VK_TAB && (!_focusMode || _navigationAccess))
+    if (message->wParam == VK_TAB)
     { HWND next = GetNextDlgTabItem(_hWnd, GetFocus(), (GetKeyState(VK_SHIFT) & 0x8000) != 0); if (next) SetFocus(next); return TRUE; }
     if (message->wParam == VK_F3) { AdvanceReaderSearch((GetKeyState(VK_SHIFT) & 0x8000) != 0); return TRUE; }
     if (!command) return FALSE;
@@ -2599,7 +2649,7 @@ LRESULT OnCreate(HWND hWnd)
     SetTreeviewFont();
     _tocProc = (WNDPROC)SetWindowLongPtr(_hTreeView, GWLP_WNDPROC, (LONG_PTR)TocProc);
     _markProc = (WNDPROC)SetWindowLongPtr(_hTreeMark, GWLP_WNDPROC, (LONG_PTR)TocProc);
-    _focusMode = _WndInfo.status != ds_normal;
+    SetReaderFocusMode(_WndInfo.status != ds_normal);
     NONCLIENTMETRICS metrics = {}; metrics.cbSize = sizeof(metrics);
     SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0);
     metrics.lfMessageFont.lfHeight = -MulDiv(9, GetWindowDpiCompat(hWnd), 72);
@@ -3072,7 +3122,7 @@ LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     _Book = pBook;
     
     SendMessage(hWnd, WM_SETREDRAW, TRUE, 0); // lock redraw
-    _focusMode = _WndInfo.status != ds_normal; _panelFromFocus = FALSE; _navigationAccess = FALSE;
+    SetReaderFocusMode(_WndInfo.status != ds_normal);
     UpdateReaderLayout(hWnd);
     // repaint for alpha
     Invalidate(hWnd, FALSE, FALSE);
@@ -3139,7 +3189,7 @@ LRESULT OnFullScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     SendMessage(hWnd, WM_SETREDRAW, TRUE, 0); // lock redraw
-    _focusMode = _WndInfo.status != ds_normal; _panelFromFocus = FALSE; _navigationAccess = FALSE;
+    SetReaderFocusMode(_WndInfo.status != ds_normal);
     UpdateReaderLayout(hWnd);
     // repaint for alpha
     Invalidate(hWnd, FALSE, FALSE);
@@ -3466,7 +3516,7 @@ LRESULT OnUpdateChapters(HWND hWnd)
     TreeView_DeleteAllItems(_hTreeView);
     if (_Book)
     {
-        tvi.mask = TVIF_TEXT /*| TVIF_IMAGE | TVIF_SELECTEDIMAGE */| TVIF_PARAM;
+        tvi.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM; tvi.iImage=tvi.iSelectedImage=0;
 
         chapters = _Book->GetChapters();
         for (i = 0; i < (int)chapters->size(); i++)
@@ -3508,7 +3558,7 @@ LRESULT OnUpdateBookMark(HWND hWnd)
     for (size_t i = 0; i < labels.size(); ++i)
     {
         TVINSERTSTRUCT insert = {}; insert.hParent = TVI_ROOT; insert.hInsertAfter = TVI_LAST;
-        insert.item.mask = TVIF_TEXT | TVIF_PARAM; insert.item.pszText = (TCHAR*)labels[i].c_str(); insert.item.lParam = i;
+        insert.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_IMAGE | TVIF_SELECTEDIMAGE; insert.item.iImage=insert.item.iSelectedImage=0; insert.item.pszText = (TCHAR*)labels[i].c_str(); insert.item.lParam = i;
         TreeView_InsertItem(_hTreeMark, &insert);
     }
     if (visible) { SendMessage(_hTreeMark, WM_SETREDRAW, TRUE, 0); InvalidateRect(_hTreeMark, NULL, FALSE); }
@@ -3663,6 +3713,15 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     KBDLLHOOKSTRUCT const * pData;
     if (nCode == HC_ACTION)
     {
+        pData=(KBDLLHOOKSTRUCT*)lParam;
+        if(pData->vkCode==VK_ESCAPE)
+        {
+            if(wParam==WM_KEYUP) _focusEscapeLatched=FALSE;
+            else if(wParam==WM_KEYDOWN)
+            {
+                if(GetForegroundWindow()!=_hWnd || ReaderNavigationTracking()) return CallNextHookEx(_hKeyboardHook,nCode,wParam,lParam);
+                MSG escape={};escape.hwnd=_hWnd;escape.message=WM_KEYDOWN;escape.wParam=VK_ESCAPE;if(ReaderFocusEscape(&escape)) return 1; }
+        }
         if (wParam == WM_KEYDOWN)
         {
             do
@@ -4058,6 +4117,7 @@ static void _free_resource(HWND hWnd)
         _Book = NULL;
     }
     _readingSurface.Reset(); _frameSurface.Reset();
+    if(_treePadding) {TreeView_SetImageList(_hTreeView,nullptr,TVSIL_NORMAL);TreeView_SetImageList(_hTreeMark,nullptr,TVSIL_NORMAL);ImageList_Destroy(_treePadding);_treePadding=nullptr;_treePaddingWidth=0;}
     ThemeShutdown();
     DestroyReaderNavigation();
     // reset
@@ -4897,6 +4957,25 @@ HBITMAP CreateAlphaBGColorBitmap(HWND hWnd, COLORREF inColour, int width, int he
     return hDIB;
 }
 
+// A transparent native image column supplies an internal text gutter. Native
+// TreeView then owns label hit testing, indentation and horizontal extent.
+static void UpdateTreePadding()
+{
+    int width=ReaderItemPadding(GetWindowDpiCompat(_hWnd));
+    if(_treePadding && _treePaddingWidth==width) return;
+    HIMAGELIST next=ImageList_Create(width,1,ILC_COLOR32|ILC_MASK,1,0);
+    if(!next) return;
+    BITMAPINFO info={};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=width;info.bmiHeader.biHeight=1;
+    info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+    void* pixels=nullptr;HBITMAP bitmap=CreateDIBSection(nullptr,&info,DIB_RGB_COLORS,&pixels,nullptr,0);
+    if(!bitmap) {ImageList_Destroy(next);return;}
+    memset(pixels,0,width*4);int image=ImageList_AddMasked(next,bitmap,RGB(0,0,0));DeleteObject(bitmap);
+    if(image<0) {ImageList_Destroy(next);return;}
+    HIMAGELIST old=_treePadding;_treePadding=next;_treePaddingWidth=width;
+    TreeView_SetImageList(_hTreeView,next,TVSIL_NORMAL);TreeView_SetImageList(_hTreeMark,next,TVSIL_NORMAL);
+    if(old) ImageList_Destroy(old);
+}
+
 void SetTreeviewFont()
 {
     static HFONT s_hFont = NULL;
@@ -4934,6 +5013,7 @@ void SetTreeviewFont()
         SendMessage(_hTreeMark, WM_SETFONT, (WPARAM)s_hFont, NULL);
         SendMessage(_hTreeMark, TVM_SETITEMHEIGHT, theMetrics.iMenuHeight, NULL);
     }
+    UpdateTreePadding();
 }
 
 BOOL LoadResourceImage(LPCWSTR lpName, LPCWSTR lpType, Gdiplus::Bitmap **image, HGLOBAL *hMemory)

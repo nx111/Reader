@@ -73,8 +73,8 @@ public:
 };
 
 inline int ReaderScale(int logical,int dpi) { return (int)((long long)logical*dpi/96); }
-inline int ReaderNavigationWidth(int width,int dpi,bool visible,bool panel)
-{ return visible?(std::min)((std::max)(0,width),ReaderScale(panel || width<ReaderScale(700,dpi)?48:176,dpi)):0; }
+inline int ReaderNavigationWidth(int width,int dpi,bool visible,bool panel,bool focus=false)
+{ return visible?(std::min)((std::max)(0,width),ReaderScale(focus || panel || width<ReaderScale(700,dpi)?48:176,dpi)):0; }
 inline int ReaderSidebarWidth(int clientWidth,int dpi,int logical)
 {
     int maximum=(std::max)(0,(std::min)(ReaderScale(640,dpi),clientWidth-ReaderScale(326,dpi)));
@@ -87,10 +87,10 @@ struct ReadingGeometry
     bool drawer;
     int readingLeft,readingTop,readingRight,readingBottom;
 };
-inline ReadingGeometry ComputeReadingGeometry(int width,int height,int dpi,bool chrome,bool panel,int sidebarLogical=240)
+inline ReadingGeometry ComputeReadingGeometry(int width,int height,int dpi,bool chrome,bool panel,int sidebarLogical=240,bool focus=false)
 {
     width=(std::max)(0,width);height=(std::max)(0,height);dpi=(std::max)(96,dpi);
-    ReadingGeometry g={};g.navigationWidth=ReaderNavigationWidth(width,dpi,chrome,panel);
+    ReadingGeometry g={};g.navigationWidth=ReaderNavigationWidth(width,dpi,chrome,panel,focus);
     int available=width-g.navigationWidth;g.drawer=width<ReaderScale(700,dpi);
     g.sidebarHeadingHeight=panel?(std::min)(height,ReaderScale(36,dpi)):0;
     if(panel)

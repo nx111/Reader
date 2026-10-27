@@ -9,10 +9,10 @@ struct ReaderNavigationGeometry
     int width, headerHeight, footerTop, footerHeight, viewportHeight, itemHeight, contentHeight, scrollMaximum;
     bool compact;
 };
-inline ReaderNavigationGeometry ReaderNavigationLayout(int width,int height,int dpi,bool visible,bool panel)
+inline ReaderNavigationGeometry ReaderNavigationLayout(int width,int height,int dpi,bool visible,bool panel,bool focus=false)
 {
     width=(std::max)(0,width);height=(std::max)(0,height);dpi=(std::max)(96,dpi);
-    ReaderNavigationGeometry g={};g.width=ReaderNavigationWidth(width,dpi,visible,panel);
+    ReaderNavigationGeometry g={};g.width=ReaderNavigationWidth(width,dpi,visible,panel,focus);
     g.compact=g.width<ReaderScale(160,dpi);g.headerHeight=(std::min)(height,ReaderScale(44,dpi));
     g.footerHeight=(std::min)((std::max)(0,height-g.headerHeight),ReaderScale(g.compact?76:48,dpi));
     g.footerTop=height-g.footerHeight;g.viewportHeight=(std::max)(0,g.footerTop-g.headerHeight);

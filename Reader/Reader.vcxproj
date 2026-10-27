@@ -185,6 +185,7 @@
     <ClInclude Include="NavigationPane.h" />
     <ClInclude Include="CommandIds.h" />
     <ClInclude Include="NavigationLayout.h" />
+    <ClInclude Include="ReaderInteraction.h" />
     <ClInclude Include="ReaderIcons.h" />
     <ClInclude Include="DrawReaderIcon.h" />
 

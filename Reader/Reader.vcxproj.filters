@@ -54,6 +54,7 @@
     <ClInclude Include="NavigationPane.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="CommandIds.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="NavigationLayout.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ReaderInteraction.h" />
     <ClInclude Include="ReaderIcons.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="DrawReaderIcon.h"><Filter>Header Files</Filter></ClInclude>
 

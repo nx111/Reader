@@ -499,7 +499,7 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                 TOOLINFO tip={}; tip.cbSize=sizeof(tip); tip.hwnd=window; tip.uFlags=TTF_IDISHWND|TTF_SUBCLASS; tip.uId=(UINT_PTR)button; tip.lpszText=(wchar_t*)labels[i];
                 SendMessage(tooltips,TTM_ADDTOOL,0,(LPARAM)&tip);
             }
-            SetProp(status,L"ReaderMutedText",(HANDLE)1); SetProp(list,L"ReaderLibraryList",(HANDLE)1); SyncFilters(); UpdateVisualMetrics();
+            SetProp(status,L"ReaderMutedText",(HANDLE)1); SetProp(list,L"ReaderLibraryList",(HANDLE)1); SetProp(list,L"ReaderPaddedList",(HANDLE)1); SyncFilters(); UpdateVisualMetrics();
             SetBusy(false); Layout(); RefreshRows(); ThemeAttachWindow(window); ThemeAttachWindow(tooltips);
         } return 0;
     case WM_PAINT:

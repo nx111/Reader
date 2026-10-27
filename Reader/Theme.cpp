@@ -1,4 +1,5 @@
 #include "Theme.h"
+#include "ReaderInteraction.h"
 #include "DrawReaderIcon.h"
 #include <algorithm>
 #include "DPIAwareness.h"
@@ -46,7 +47,7 @@ void PaintButton(HWND window, HDC dc, WindowData* data)
         bool enabled=IsWindowEnabled(window)!=FALSE, focus=GetFocus()==window;
         LRESULT state=SendMessage(window,BM_GETSTATE,0,0);
         bool selected=sidebar && (SendMessage(window,BM_GETCHECK,0,0)==BST_CHECKED);
-        auto colors=ReaderFlatControlColors(palette,enabled,data->hot,(state&BST_PUSHED)!=0,selected);
+        auto colors=ReaderFlatControlColors(ThemeControlPalette(window),enabled,data->hot,(state&BST_PUSHED)!=0,selected);
         Fill(dc,rect,colors.background); COLORREF color=colors.ink;
         int dpi=GetWindowDpiCompat(window), size=MulDiv(sidebar?20:18,dpi,96);
         bool compact=GetProp(window,L"ReaderCompact")!=NULL;
@@ -167,6 +168,31 @@ LRESULT DrawReadingRow(HWND tree,NMTVCUSTOMDRAW* draw)
     int inset=MulDiv(12,GetWindowDpiCompat(tree),96);row.left=inset;row.right-=inset;row.top=row.bottom-1;
     Fill(draw->nmcd.hdc,row,palette.border);RestoreDC(draw->nmcd.hdc,saved);
     return CDRF_SKIPDEFAULT;
+}
+
+LRESULT DrawPaddedCell(HWND list,NMLVCUSTOMDRAW* draw)
+{
+    const int row=(int)draw->nmcd.dwItemSpec,column=draw->iSubItem;
+    RECT cell={};ListView_GetSubItemRect(list,row,column,LVIR_BOUNDS,&cell);
+    if(column==0) {RECT heading;HWND header=ListView_GetHeader(list);if(Header_GetItemRect(header,0,&heading)) {MapWindowPoints(header,list,(POINT*)&heading,2);cell.left=heading.left;cell.right=heading.right;}}
+    const bool selected=(ListView_GetItemState(list,row,LVIS_SELECTED)&LVIS_SELECTED)!=0;
+    const bool library=GetProp(list,L"ReaderLibraryList")!=nullptr;
+    int saved=SaveDC(draw->nmcd.hdc);IntersectClipRect(draw->nmcd.hdc,cell.left,cell.top,cell.right,cell.bottom);
+    Fill(draw->nmcd.hdc,cell,selected?palette.selected:palette.surface);
+    HFONT font=library&&column==0?(HFONT)GetProp(list,L"ReaderTitleFont"):(HFONT)SendMessage(list,WM_GETFONT,0,0);
+    if(font) SelectObject(draw->nmcd.hdc,font);
+    std::vector<wchar_t> text(512,0);
+    for(;;)
+    {
+        LVITEM item={};item.iSubItem=column;item.pszText=text.data();item.cchTextMax=(int)text.size();
+        int size=(int)SendMessage(list,LVM_GETITEMTEXT,row,(LPARAM)&item);
+        if(size+1<(int)text.size()||text.size()>=65536) break;text.resize(text.size()*2,0);
+    }
+    RECT label=cell;int padding=ReaderItemInset(cell.right-cell.left,GetWindowDpiCompat(list));label.left+=padding;label.right-=padding;
+    SetBkMode(draw->nmcd.hdc,TRANSPARENT);SetTextColor(draw->nmcd.hdc,!IsWindowEnabled(list)?palette.disabled:selected?palette.selectedText:library&&column>0?palette.muted:palette.text);
+    DrawText(draw->nmcd.hdc,text.data(),-1,&label,DT_LEFT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+    if(GetFocus()==list && (ListView_GetItemState(list,row,LVIS_FOCUSED)&LVIS_FOCUSED)) {RECT cue=cell;InflateRect(&cue,-1,-1);DrawFocusRect(draw->nmcd.hdc,&cue);}
+    RestoreDC(draw->nmcd.hdc,saved);return CDRF_SKIPDEFAULT;
 }
 
 void RestoreMenu(HMENU menu)
@@ -384,7 +410,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 Fill(draw->hdc, rc, draw->uItemState & CDIS_SELECTED ? palette.pressed : draw->uItemState & CDIS_HOT ? palette.hover : palette.raised);
                 Frame(draw->hdc, rc, palette.border);
                 wchar_t text[256] = {}; HDITEM item = {}; item.mask = HDI_TEXT | HDI_FORMAT; item.pszText = text; item.cchTextMax = 256;
-                Header_GetItem(from, (int)draw->dwItemSpec, &item); InflateRect(&rc, -5, 0);
+                Header_GetItem(from, (int)draw->dwItemSpec, &item);
+                int padding=GetProp(GetParent(from),L"ReaderPaddedList")?ReaderItemInset(rc.right-rc.left,GetWindowDpiCompat(from)):5;
+                InflateRect(&rc,-padding,0);
                 SetBkMode(draw->hdc, TRANSPARENT); SetTextColor(draw->hdc, IsWindowEnabled(from) ? palette.text : palette.disabled);
                 if (item.fmt & (HDF_SORTUP | HDF_SORTDOWN))
                 {
@@ -402,15 +430,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             LRESULT inherited = DefSubclassProc(window, message, wParam, lParam);
             if (draw->dwDrawStage==CDDS_ITEMPREPAINT && GetProp(from,L"ReaderReadingSidebar")) return DrawReadingRow(from,(NMTVCUSTOMDRAW*)lParam);
             if (draw->dwDrawStage == CDDS_PREPAINT) return inherited | CDRF_NOTIFYITEMDRAW;
-            if (draw->dwDrawStage == (CDDS_ITEMPREPAINT|CDDS_SUBITEM) && GetProp(from,L"ReaderLibraryList"))
-            {
-                auto list=(NMLVCUSTOMDRAW*)lParam; bool selected=(ListView_GetItemState(from,(int)draw->dwItemSpec,LVIS_SELECTED)&LVIS_SELECTED)!=0;
-                list->clrText=selected?palette.selectedText:list->iSubItem==0?palette.text:palette.muted;
-                list->clrTextBk=selected?palette.selected:palette.surface;
-                HFONT font=list->iSubItem==0?(HFONT)GetProp(from,L"ReaderTitleFont"):(HFONT)SendMessage(from,WM_GETFONT,0,0);
-                if(font) { SelectObject(draw->hdc,font); return inherited|CDRF_NEWFONT; }
-                return inherited;
-            }
+            if (draw->dwDrawStage==(CDDS_ITEMPREPAINT|CDDS_SUBITEM) && GetProp(from,L"ReaderPaddedList"))
+            { if(inherited&CDRF_SKIPDEFAULT) return inherited;return DrawPaddedCell(from,(NMLVCUSTOMDRAW*)lParam); }
             if (draw->dwDrawStage == CDDS_ITEMPREPAINT)
             {
                 bool selected = (draw->uItemState & CDIS_SELECTED) != 0;
@@ -425,7 +446,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 // accessibility state stay intact while palette colors replace system blue.
                 draw->uItemState &= ~CDIS_SELECTED;
             }
-            if (draw->dwDrawStage==CDDS_ITEMPREPAINT && GetProp(from,L"ReaderLibraryList")) return inherited|CDRF_NOTIFYSUBITEMDRAW;
+            if (draw->dwDrawStage==CDDS_ITEMPREPAINT && GetProp(from,L"ReaderPaddedList")) return inherited|CDRF_NOTIFYSUBITEMDRAW;
             return inherited;
         }
     }
@@ -450,6 +471,17 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 } // namespace
 
 const ReaderPalette& ThemeColors() { return palette; }
+ReaderPalette ThemeControlPalette(HWND window)
+{
+    for(HWND ancestor=window;ancestor;ancestor=GetParent(ancestor))
+        if(GetProp(ancestor,L"ReaderFocusRail"))
+        {
+            HIGHCONTRAST high={};high.cbSize=sizeof(high);
+            bool highContrast=SystemParametersInfo(SPI_GETHIGHCONTRAST,sizeof(high),&high,0)&&(high.dwFlags&HCF_HIGHCONTRASTON);
+            return ReaderFocusPalette(palette,reading.background,highContrast || GetProp(ancestor,L"ReaderRailClear")!=nullptr);
+        }
+    return palette;
+}
 HBRUSH ThemeWindowBrush() { return windowBrush; }
 ReaderColors ThemeReadingColors(const header_t* settings)
 {
