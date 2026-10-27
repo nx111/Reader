@@ -87,13 +87,21 @@ int main(int argc,char** argv)
             assert(pad==expected[i]&&pad==2*ReaderSidebarPadding(dpi));
             auto content=ReaderReadingContentRect(Rect{100,200,1100,1000},dpi,Rect{});
             assert(content.left==100+pad&&content.top==200+pad&&content.right==1100-pad&&content.bottom==1000-pad);
-            // Legacy custom values are not added on top; larger explicit values survive.
+            // Legacy asymmetric values never change the automatic standard.
             content=ReaderReadingContentRect(Rect{0,0,1000,800},dpi,Rect{5,90,pad,110});
-            assert(content.left==pad&&content.top==90&&content.right==1000-pad&&content.bottom==690);
+            assert(content.left==pad&&content.top==pad&&content.right==1000-pad&&content.bottom==800-pad);
+            Rect stored={5,90,pad,110},shown=ReaderReadingInsets(stored,dpi,false);int custom=0;
+            assert(!ReaderApplyReadingInsetEdit(stored,custom,shown,shown)&&!custom);
+            assert(stored.left==5&&stored.top==90&&stored.bottom==110); // No edit preserves old data.
+            assert(ReaderApplyReadingInsetEdit(stored,custom,shown,Rect{6,7,8,9})&&custom==1);
+            content=ReaderReadingContentRect(Rect{0,0,1000,800},dpi,stored,custom!=0);
+            assert(content.left==6&&content.top==7&&content.right==992&&content.bottom==791);
+            assert(!ReaderApplyReadingInsetEdit(stored,custom,stored,stored)&&custom==1);
             for(int w:{0,1,2,3,40,100}) for(int h:{0,1,2,3,40,100})
             {
                 auto tiny=ReaderReadingContentRect(Rect{0,0,w,h},dpi,Rect{-9,1000000,1000000,-9});
                 assert(tiny.left>=0&&tiny.right<=w&&tiny.top>=0&&tiny.bottom<=h);
+                assert(tiny.left==tiny.top&&w-tiny.right==tiny.left&&h-tiny.bottom==tiny.left);
                 assert(tiny.right-tiny.left>=(w?1:0)&&tiny.bottom-tiny.top>=(h?1:0));
             }
         }

@@ -501,6 +501,36 @@ static void UiPersistence()
     assert(Bytes(L"C:\\Reader\\.cache.dat.v3.bak") == legacy);
 }
 
+static void ReadingBorderPersistence()
+{
+    Reset();Cache source(L".cache.dat");assert(source.init());
+    auto h=source.get_header();assert(!h->reading_border_custom);h->internal_border={60,90,44,110};
+    int id=source.new_item(L"C:\\books\\margin.epub")->id;
+    source.get_by_id(id)->index=401;source.add_mark(source.get_by_id(id),17);assert(source.save());
+    cJSON* root=cJSON_Parse(Encoded(Bytes(primary)).c_str());assert(root);
+    cJSON_DeleteItemFromObject(cJSON_GetObjectItem(root,"ui"),"reading_border_custom");
+    char* json=cJSON_PrintUnformatted(root);std::string old=Encoded(json);free(json);cJSON_Delete(root);
+    Put(primary,old);TestOperations.clear();Cache legacy(L".cache.dat");assert(legacy.init());
+    h=legacy.get_header();assert(!h->reading_border_custom&&h->internal_border.left==60&&h->internal_border.bottom==110);
+    assert(Bytes(primary)==old&&TestOperations.empty());assert(legacy.save());
+    Cache automatic(L".cache.dat");assert(automatic.init());
+    h=automatic.get_header();assert(!h->reading_border_custom&&h->internal_border.top==90&&h->internal_border.right==44);
+    h->reading_border_custom=1;h->internal_border={6,7,8,9};assert(automatic.save());
+    Cache edited(L".cache.dat");assert(edited.init());h=edited.get_header();
+    assert(h->reading_border_custom==1&&h->internal_border.left==6&&h->internal_border.bottom==9);
+    assert(edited.get_by_id(id)->index==401&&edited.get_by_id(id)->mark[0]==17);
+    const std::string good=Encoded(Bytes(primary));
+    for(const char* value:{"2","-1","null","0.5","\"1\""})
+    {
+        root=cJSON_Parse(good.c_str());auto ui=cJSON_GetObjectItem(root,"ui");
+        cJSON_DeleteItemFromObject(ui,"reading_border_custom");
+        cJSON_AddItemToObject(ui,"reading_border_custom",cJSON_Parse(value));
+        json=cJSON_PrintUnformatted(root);std::string invalid=Encoded(json);free(json);cJSON_Delete(root);
+        Put(primary,invalid);TestOperations.clear();Cache bad(L".cache.dat");assert(!bad.init());
+        assert(Bytes(primary)==invalid&&TestOperations.empty());
+    }
+}
+
 static void UiInvalid()
 {
     const char* values[] = { "null", "{}", "[]", "0", "{\"theme\":2,\"reading_custom\":0,\"sidebar_width\":240}",
@@ -769,6 +799,7 @@ int main(int argc, char** argv)
     else if (test == "notes_pdf") NotesAndPdfState();
     else if (test == "batch") Batch(); else if (test == "search_bridge") Bridge::SearchBridge();
     else if (test == "batch_bridge") Bridge::BatchBridge();
+    else if (test == "reading_border") ReadingBorderPersistence();
     else if (test == "ui_persistence") UiPersistence(); else if (test == "ui_invalid") UiInvalid();
     else if (test == "splitter") Splitter(); else if (test == "palette") Palette();
     else return 2;

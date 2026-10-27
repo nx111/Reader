@@ -1,5 +1,7 @@
 #include "DisplaySet.h"
 #include "Theme.h"
+#include "ReaderInteraction.h"
+#include "DPIAwareness.h"
 #include "resource.h"
 #include "types.h"
 #include "Book.h"
@@ -25,11 +27,12 @@ typedef struct display_set_data_t
     int line_indent;
     int blank_lines;
     int chapter_page;
-    int ui_theme, reading_custom;
+    int ui_theme, reading_custom, reading_border_custom;
     int is_save;
 } display_set_data_t;
 
 static display_set_data_t _display;
+static RECT _initialBorder;
 static LOGFONT *_p_font = NULL;
 static u32 *_p_font_color = NULL;
 static HCURSOR _hCursor = NULL;
@@ -69,6 +72,7 @@ static void _update_preview(HDC hDC, RECT *rc);
 #define COPY_DISPLAY_PARAMS(s, d) \
     (d)->ui_theme = (s)->ui_theme; \
     (d)->reading_custom = (s)->reading_custom; \
+    (d)->reading_border_custom = (s)->reading_border_custom; \
     (d)->font = (s)->font; \
     (d)->font_color = (s)->font_color; \
     (d)->font_title = (s)->font_title; \
@@ -112,6 +116,7 @@ void OpenDisplaySetDlg(void)
                 || _display.line_gap != _header->line_gap
                 || _display.paragraph_gap != _header->paragraph_gap
                 || 0 != memcmp(&_display.internal_border, &_header->internal_border, sizeof(RECT))
+                || _display.reading_border_custom != _header->reading_border_custom
                 || _display.word_wrap != _header->word_wrap
                 || _display.line_indent != _header->line_indent
                 || _display.blank_lines != _header->blank_lines
@@ -328,7 +333,8 @@ static void _init_bg_image_set(HWND hDlg)
 static void _init_layout_set(HWND hDlg)
 {
     TCHAR buf[256] = { 0 };
-    _stprintf(buf, _T("%d,%d,%d,%d"), _display.internal_border.left, _display.internal_border.top, _display.internal_border.right, _display.internal_border.bottom);
+    _initialBorder = ReaderReadingInsets(_display.internal_border, GetWindowDpiCompat(hDlg), _display.reading_border_custom != 0);
+    _stprintf(buf, _T("%d,%d,%d,%d"), _initialBorder.left, _initialBorder.top, _initialBorder.right, _initialBorder.bottom);
     SetDlgItemInt(hDlg, IDC_EDIT_CHARGAP, _display.char_gap, FALSE);
     SetDlgItemInt(hDlg, IDC_EDIT_LINEGAP, _display.line_gap, FALSE);
     SetDlgItemInt(hDlg, IDC_EDIT_PARAGRAPHGAP, _display.paragraph_gap, FALSE);
@@ -416,12 +422,14 @@ static BOOL _valid_layout_set(HWND hDlg)
         MessageBox_(hDlg, IDS_INVALID_PARAGRAPHGAP, IDS_ERROR, MB_OK|MB_ICONERROR);
         return FALSE;
     }
+    RECT entered;
     GetDlgItemText(hDlg, IDC_EDIT_BORDER, buf, 256);
-    if (4 != _stscanf(buf, _T("%d,%d,%d,%d"), &_display.internal_border.left, &_display.internal_border.top, &_display.internal_border.right, &_display.internal_border.bottom))
+    if (4 != _stscanf(buf, _T("%d,%d,%d,%d"), &entered.left, &entered.top, &entered.right, &entered.bottom))
     {
         MessageBox_(hDlg, IDS_INVALID_INBORDER, IDS_ERROR, MB_OK|MB_ICONERROR);
         return FALSE;
     }
+    ReaderApplyReadingInsetEdit(_display.internal_border, _display.reading_border_custom, _initialBorder, entered);
     return TRUE;
 }
 

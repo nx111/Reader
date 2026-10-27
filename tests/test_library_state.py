@@ -87,6 +87,9 @@ class LibraryStateTests(unittest.TestCase):
     def test_ui_schema_migration_backup_and_persistence_preserve_books(self):
         self.run_case("ui_persistence")
 
+    def test_reading_border_legacy_defaults_and_explicit_edits_preserve_cache(self):
+        self.run_case("reading_border")
+
     def test_malformed_theme_or_sidebar_settings_preserve_original_cache(self):
         self.run_case("ui_invalid")
 

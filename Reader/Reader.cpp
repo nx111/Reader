@@ -2852,7 +2852,7 @@ LRESULT OnPaint(HWND hWnd, HDC hdc)
     HBRUSH brush = CreateSolidBrush(colors.background); FillRect(buffer, &page, brush); DeleteObject(brush);
     Gdiplus::Bitmap* image = LoadBGImage(page.right, page.bottom);
     if (image) { Gdiplus::Graphics graphics(buffer); graphics.DrawImage(image, 0, 0, page.right, page.bottom); }
-    RECT content = ReaderReadingContentRect(page, GetWindowDpiCompat(_hReadingView), _header->internal_border);
+    RECT content = ReaderReadingContentRect(page, GetWindowDpiCompat(_hReadingView), _header->internal_border, _header->reading_border_custom != 0);
     int saved = SaveDC(buffer);
     IntersectClipRect(buffer, content.left, content.top, content.right, content.bottom);
     if (_Book && !_Book->IsLoading())

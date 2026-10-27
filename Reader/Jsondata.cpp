@@ -1238,6 +1238,7 @@ char* create_json(header_t *data, const bookmark_store_t* bookmarks)
     cJSON* ui = cJSON_AddObjectToObject(root, "ui");
     cJSON_AddNumberToObject(ui, "theme", data->ui_theme);
     cJSON_AddNumberToObject(ui, "reading_custom", data->reading_custom);
+    cJSON_AddNumberToObject(ui, "reading_border_custom", data->reading_border_custom);
     cJSON_AddNumberToObject(ui, "sidebar_width", data->sidebar_width);
     headerobj = new json_header_t(header, data);
     if (data->item_count > 0)
@@ -1300,16 +1301,19 @@ BOOL parser_json(const char* json, header_t* defhdr, void** data, int* size, int
     json_header_t headerobj(header);
     headerobj.GetData(defhdr);
     cJSON* ui = cJSON_GetObjectItem(root, "ui");
-    defhdr->ui_theme = 0; defhdr->reading_custom = 1; defhdr->sidebar_width = 240;
+    defhdr->ui_theme = 0; defhdr->reading_custom = 1; defhdr->reading_border_custom = 0; defhdr->sidebar_width = 240;
     if (schema >= 4 && !ui) { cJSON_Delete(root); return FALSE; }
     if (ui)
     {
         cJSON* mode = cJSON_GetObjectItem(ui, "theme");
         cJSON* custom = cJSON_GetObjectItem(ui, "reading_custom");
         cJSON* width = cJSON_GetObjectItem(ui, "sidebar_width");
-        if (!cJSON_IsObject(ui) || !JsonInteger(mode, 0, 1) || !JsonInteger(custom, 0, 1) || !JsonInteger(width, 160, 640))
+        cJSON* border = cJSON_GetObjectItem(ui, "reading_border_custom");
+        if (!cJSON_IsObject(ui) || !JsonInteger(mode, 0, 1) || !JsonInteger(custom, 0, 1) || !JsonInteger(width, 160, 640)
+            || (border && !JsonInteger(border, 0, 1)))
         { cJSON_Delete(root); return FALSE; }
         defhdr->ui_theme = mode->valueint; defhdr->reading_custom = custom->valueint; defhdr->sidebar_width = width->valueint;
+        if (border) defhdr->reading_border_custom = border->valueint;
     }
     defhdr->cache_schema = CACHE_SCHEMA_VERSION;
     defhdr->item_count = count->valueint;

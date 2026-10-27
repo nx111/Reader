@@ -67,7 +67,7 @@ class UiSourceContractTests(unittest.TestCase):
     def test_reading_insets_align_text_cover_pdf_and_editor_without_extra_margins(self):
         reader=(READER/"Reader.cpp").read_text()
         paint=reader.split("LRESULT OnPaint(HWND hWnd, HDC hdc)\n",1)[1].split("VOID Invalidate",1)[0]
-        self.assertIn("ReaderReadingContentRect(page, GetWindowDpiCompat(_hReadingView), _header->internal_border)",paint)
+        self.assertIn("ReaderReadingContentRect(page, GetWindowDpiCompat(_hReadingView), _header->internal_border, _header->reading_border_custom != 0)",paint)
         self.assertIn("IntersectClipRect(buffer, content.left, content.top, content.right, content.bottom)",paint)
         self.assertIn("DrawPage(hWnd, buffer, &content, FALSE)",paint)
         self.assertIn("DrawLoading(buffer, content)",paint)
@@ -83,9 +83,15 @@ class UiSourceContractTests(unittest.TestCase):
         self.assertNotIn("InflateRect(&text",pdf)
         editor=(READER/"Editctrl.cpp").read_text()
         self.assertEqual(editor.count("    UpdateEditorContentRect();"),2)
-        self.assertIn("ReaderReadingContentRect(client, GetWindowDpiCompat(g_hEditCtrl), _header->internal_border)",editor)
+        self.assertIn("ReaderReadingContentRect(client, GetWindowDpiCompat(g_hEditCtrl), _header->internal_border, _header->reading_border_custom != 0)",editor)
         self.assertIn("EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0",editor)
         self.assertIn("sidebar&&!compact?ReaderSidebarPadding(dpi):",(READER/"Theme.cpp").read_text())
+        display=(READER/"DisplaySet.cpp").read_text()
+        self.assertIn("_initialBorder = ReaderReadingInsets(_display.internal_border, GetWindowDpiCompat(hDlg), _display.reading_border_custom != 0)",display)
+        self.assertIn("ReaderApplyReadingInsetEdit(_display.internal_border, _display.reading_border_custom, _initialBorder, entered)",display)
+        self.assertIn("(d)->reading_border_custom = (s)->reading_border_custom",display)
+        self.assertIn("if (_display.is_save)",display)
+
 
     def test_scrollbars_region_routing_full_labels_and_splitter_cancel(self):
         reader = (READER / "Reader.cpp").read_text()

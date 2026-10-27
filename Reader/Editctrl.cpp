@@ -30,7 +30,7 @@ static void EnableAllMenu(HWND hWnd, BOOL enable);
 static void UpdateEditorContentRect()
 {
     RECT client; GetClientRect(g_hEditCtrl, &client);
-    client = ReaderReadingContentRect(client, GetWindowDpiCompat(g_hEditCtrl), _header->internal_border);
+    client = ReaderReadingContentRect(client, GetWindowDpiCompat(g_hEditCtrl), _header->internal_border, _header->reading_border_custom != 0);
     SendMessage(g_hEditCtrl, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
     SendMessage(g_hEditCtrl, EM_SETRECT, 0, (LPARAM)&client);
 }

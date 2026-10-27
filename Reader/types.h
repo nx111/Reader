@@ -207,6 +207,7 @@ typedef struct header_t
     int next_item_id;
     int ui_theme; // 0 light, 1 dark
     int reading_custom; // preserve explicit reading colors/images
+    int reading_border_custom; // only post-standard explicit margin edits override automatic insets
     int sidebar_width; // logical 96-DPI pixels, retained when window clamps it
     WINDOWPLACEMENT placement;
     WINDOWPLACEMENT fs_placement; // fullscreen restore

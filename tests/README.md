@@ -231,10 +231,13 @@ UI tests or sanitizer matrix were run for this change; resources are unchanged.
 
 The main navigation icon inset is the shared 14 DIP metric. The reading child
 uses twice its once-scaled pixel value on each side (28 px at 96 DPI, 56 px at
-192 DPI), independent of text size. Larger existing custom borders override
-that minimum; they are not added again. Text pagination, cover placement, PDF
+192 DPI), independent of text size. Old cached borders are retained as data but
+do not override the uniform default. Only a new explicit edit to the margin
+field enables custom borders; saving other display options keeps automatic
+insets. The optional `ui.reading_border_custom` flag records this distinction
+without changing existing book or margin data. Text pagination, cover placement, PDF
 fit/zoom and the native editor consume the same content rectangle. Very small
-viewports clamp their insets to leave a pixel of content.
+viewports shrink all four automatic insets equally to leave a pixel of content.
 
 Run only the directly affected checks from `tests/`:
 
@@ -244,8 +247,9 @@ python -m unittest -v \
   test_reader_ui.PaintBoundaryTests.test_actual_pagination_keeps_anchor_when_reflow_cannot_fit_a_glyph \
   test_reader_ui.PaintBoundaryTests.test_actual_pagination_uses_inset_dimensions_once_in_both_directions \
   test_reader_ui.UiSourceContractTests.test_reading_insets_align_text_cover_pdf_and_editor_without_extra_margins \
-  test_navigation_ui.NavigationLayoutTests.test_reading_insets_match_sidebar_dpi_and_preserve_custom_minimums \
-  test_navigation_ui.NavigationLayoutTests.test_pdf_fit_zoom_scroll_and_resize_preserve_normalized_anchor
+  test_navigation_ui.NavigationLayoutTests.test_reading_insets_ignore_legacy_borders_until_explicit_edit \
+  test_navigation_ui.NavigationLayoutTests.test_pdf_fit_zoom_scroll_and_resize_preserve_normalized_anchor \
+  test_library_state.LibraryStateTests.test_reading_border_legacy_defaults_and_explicit_edits_preserve_cache
 ```
 
 These are portable geometry, production pagination/paint bridge and source
