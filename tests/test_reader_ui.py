@@ -138,7 +138,11 @@ class UiSourceContractTests(unittest.TestCase):
         for argument in ("/p:Configuration=Release", "/p:PlatformToolset=v143", "/p:WindowsTargetPlatformVersion=10.0"):
             self.assertIn(argument, actual)
         self.assertIn("scripts/fetch-pdfium.ps1", actual)
-        self.assertIn("platform: Win32", actual); self.assertIn("platform: x64", actual)
+        self.assertIn("platform: x86", actual); self.assertIn("platform: x64", actual)
+        solution = (ROOT / "Reader.sln").read_text(encoding="utf-8-sig")
+        for platform in ("x86", "x64"):
+            self.assertIn("Release|" + platform + " = Release|" + platform, solution)
+        self.assertIn("fail-fast: false", actual)
         self.assertIn("pdfium.dll", actual); self.assertIn("opensrc/pdfium/licenses", actual)
         self.assertNotIn("permissions:", actual); self.assertNotIn("secrets.", actual)
         self.assertNotIn("ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION", actual)

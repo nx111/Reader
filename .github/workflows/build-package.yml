@@ -11,12 +11,13 @@ jobs:
   build-x64:
     runs-on: windows-2022
     strategy:
+      fail-fast: false
       matrix:
         include:
           - platform: x64
             arch: x64
             output: x64/Release
-          - platform: Win32
+          - platform: x86
             arch: x86
             output: Release
 
