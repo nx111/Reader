@@ -1,5 +1,7 @@
 #include <algorithm>
 #include "NavigationPane.h"
+#include "ReaderInteraction.h"
+#include "DPIAwareness.h"
 #include "Theme.h"
 #include "Editctrl.h"
 #include "Keyset.h"
@@ -14,6 +16,7 @@ static TCHAR *g_text = NULL;
 
 extern keydata_t g_Keysets[KI_MAXCOUNT];
 extern Book *_Book;
+extern header_t *_header;
 extern void InvalidateReadingText();
 extern HWND _hWnd;
 extern window_info_t _WndInfo;
@@ -24,6 +27,13 @@ extern LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 static LRESULT CALLBACK EditWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 static void EnableMenu(HMENU hMenu, BOOL enable);
 static void EnableAllMenu(HWND hWnd, BOOL enable);
+static void UpdateEditorContentRect()
+{
+    RECT client; GetClientRect(g_hEditCtrl, &client);
+    client = ReaderReadingContentRect(client, GetWindowDpiCompat(g_hEditCtrl), _header->internal_border);
+    SendMessage(g_hEditCtrl, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
+    SendMessage(g_hEditCtrl, EM_SETRECT, 0, (LPARAM)&client);
+}
 
 void EC_EnterEditMode(HINSTANCE hInst, HWND hWnd, LOGFONT *font, TCHAR *text, BOOL readonly)
 {
@@ -52,8 +62,7 @@ void EC_EnterEditMode(HINSTANCE hInst, HWND hWnd, LOGFONT *font, TCHAR *text, BO
     SetWindowPos(g_hEditCtrl, NULL, rc.left, rc.top, rc.right-rc.left, rc.bottom-rc.top, SWP_NOREDRAW);
     SendMessage(g_hEditCtrl, WM_SETFONT, (WPARAM)g_hFont, TRUE);
     SendMessage(g_hEditCtrl, WM_SETTEXT, 0, (LPARAM)text);
-    OffsetRect(&rc, -rc.left, -rc.top);
-    SendMessage(g_hEditCtrl, EM_SETRECT, 0, (LPARAM)&rc);
+    UpdateEditorContentRect();
     SendMessage(g_hEditCtrl, EM_SETREADONLY, (WPARAM)readonly, NULL);
 
     SetFocus(g_hEditCtrl);
@@ -211,5 +220,5 @@ void EC_UpdateReadingRect(const RECT* rect)
 {
     if(!g_IsEditMode || !g_hEditCtrl) return;
     SetWindowPos(g_hEditCtrl,NULL,rect->left,rect->top,(std::max)(1,(int)(rect->right-rect->left)),(std::max)(1,(int)(rect->bottom-rect->top)),SWP_NOACTIVATE|SWP_NOZORDER);
-    RECT client;GetClientRect(g_hEditCtrl,&client);SendMessage(g_hEditCtrl,EM_SETRECT,0,(LPARAM)&client);
+    UpdateEditorContentRect();
 }

@@ -17,6 +17,23 @@ public:
 inline int ReaderFontPoints(int current,int steps)
 {return (int)(std::max)(int64_t(1),(std::min)(int64_t(72),(int64_t)current+steps));}
 
+// The expanded sidebar icon inset, scaled once using MulDiv's positive rounding.
+inline int ReaderSidebarPadding(int dpi) { return (14*(std::max)(96,dpi)+48)/96; }
+inline int ReaderReadingPadding(int dpi) { return 2*ReaderSidebarPadding(dpi); }
+template<class Rect> inline Rect ReaderReadingContentRect(Rect bounds,int dpi,const Rect& configured)
+{
+    // Existing custom borders are a minimum override, never added to the new inset.
+    // Keep room for a pixel even when the reading child becomes very small.
+    int base=ReaderReadingPadding(dpi);
+    int x=(std::max)(0,(int)(bounds.right-bounds.left)-1)/2;
+    int y=(std::max)(0,(int)(bounds.bottom-bounds.top)-1)/2;
+    bounds.left+=(std::min)(x,(std::max)(base,(int)configured.left));
+    bounds.right-=(std::min)(x,(std::max)(base,(int)configured.right));
+    bounds.top+=(std::min)(y,(std::max)(base,(int)configured.top));
+    bounds.bottom-=(std::min)(y,(std::max)(base,(int)configured.bottom));
+    return bounds;
+}
+
 inline int ReaderItemPadding(int dpi) { return (std::max)(1,8*(std::max)(96,dpi)/96); }
 inline int ReaderItemInset(int width,int dpi)
 { return (std::min)(ReaderItemPadding(dpi),(std::max)(0,(width-1)/2)); }

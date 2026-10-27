@@ -52,7 +52,7 @@ void PaintButton(HWND window, HDC dc, WindowData* data)
         Fill(dc,rect,colors.background); COLORREF color=colors.ink;
         int dpi=GetWindowDpiCompat(window), size=MulDiv(sidebar?20:18,dpi,96);
         bool compact=GetProp(window,L"ReaderCompact")!=NULL;
-        int left=sidebar&&!compact?MulDiv(14,dpi,96):(rect.right-size)/2;
+        int left=sidebar&&!compact?ReaderSidebarPadding(dpi):(rect.right-size)/2;
         RECT bounds={left,(rect.bottom-size)/2,left+size,(rect.bottom+size)/2}; DrawReaderIcon(dc,icon,bounds,color);
         if(sidebar && !compact)
         {

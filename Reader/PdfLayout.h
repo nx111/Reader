@@ -9,9 +9,9 @@ inline ReaderPdfViewport ReaderPdfLayout(double paperWidth, double paperHeight, 
 {
     ReaderPdfViewport g = {}; g.width=(std::max)(1,width);g.height=(std::max)(1,height);
     if (!std::isfinite(paperWidth) || !std::isfinite(paperHeight) || paperWidth <= 0 || paperHeight <= 0) return g;
-    double padding=12.0*(std::max)(96,dpi)/96;
-    double fit=(std::max)(1.0,g.width-padding*2)/paperWidth;
-    g.scale=zoom==0?fit:zoom==-1?(std::min)(fit,(std::max)(1.0,g.height-padding*2)/paperHeight):zoom/100.0*(std::max)(96,dpi)/72;
+    // The reading child supplies the already-inset content viewport.
+    double fit=g.width/paperWidth;
+    g.scale=zoom==0?fit:zoom==-1?(std::min)(fit,g.height/paperHeight):zoom/100.0*(std::max)(96,dpi)/72;
     g.pageWidth=(int)(std::min)(1000000.0,(std::max)(1.0,paperWidth*g.scale));
     g.pageHeight=(int)(std::min)(1000000.0,(std::max)(1.0,paperHeight*g.scale));
     g.maxX=(std::max)(0,g.pageWidth-g.width);g.maxY=(std::max)(0,g.pageHeight-g.height);

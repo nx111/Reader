@@ -226,3 +226,28 @@ reuse the production cache harness but execute only opacity normalization, legac
 migration/data preservation and invalid-cache protection. Changed Reader/Cache/Page
 units receive syntax checks in both configurations. No unrelated format/PDF/library
 UI tests or sanitizer matrix were run for this change; resources are unchanged.
+
+## Reading content insets (targeted)
+
+The main navigation icon inset is the shared 14 DIP metric. The reading child
+uses twice its once-scaled pixel value on each side (28 px at 96 DPI, 56 px at
+192 DPI), independent of text size. Larger existing custom borders override
+that minimum; they are not added again. Text pagination, cover placement, PDF
+fit/zoom and the native editor consume the same content rectangle. Very small
+viewports clamp their insets to leave a pixel of content.
+
+Run only the directly affected checks from `tests/`:
+
+```sh
+python -m unittest -v \
+  test_reader_ui.PaintBoundaryTests.test_actual_paint_uses_child_local_bounds_and_preserves_anchor \
+  test_reader_ui.PaintBoundaryTests.test_actual_pagination_keeps_anchor_when_reflow_cannot_fit_a_glyph \
+  test_reader_ui.PaintBoundaryTests.test_actual_pagination_uses_inset_dimensions_once_in_both_directions \
+  test_reader_ui.UiSourceContractTests.test_reading_insets_align_text_cover_pdf_and_editor_without_extra_margins \
+  test_navigation_ui.NavigationLayoutTests.test_reading_insets_match_sidebar_dpi_and_preserve_custom_minimums \
+  test_navigation_ui.NavigationLayoutTests.test_pdf_fit_zoom_scroll_and_resize_preserve_normalized_anchor
+```
+
+These are portable geometry, production pagination/paint bridge and source
+contract checks. They do not verify actual Windows font rendering, edit-control
+formatting or PDF pixels on screen.

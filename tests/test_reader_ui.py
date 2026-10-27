@@ -22,7 +22,7 @@ class PaintBoundaryTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(prefix="reader-paint-")
         cls.addClassCleanup(cls.temp.cleanup)
         work = Path(cls.temp.name)
-        for name in ("GdiSurface.h", "ThemePalette.h"):
+        for name in ("GdiSurface.h", "ThemePalette.h", "ReaderInteraction.h"):
             shutil.copy2(READER / name, work / name)
         shutil.copy2(ROOT / "tests/reader_paint_compat.h", work / "framework.h")
         reader = (READER / "Reader.cpp").read_text()
@@ -31,7 +31,8 @@ class PaintBoundaryTests(unittest.TestCase):
                      reader.split("VOID Invalidate(HWND hWnd, BOOL bOnlyClient, BOOL bErase)\n",1)[1].split("LRESULT OnSize",1)[0]]
         (work / "reader_paint.inc").write_text("static void SyncCurrentChapter(BOOL reveal)\n"+functions[0]
             +"LRESULT OnPaint(HWND hWnd, HDC hdc)\n"+functions[1]+"VOID Invalidate(HWND hWnd, BOOL bOnlyClient, BOOL bErase)\n"+functions[2]
-            + "void Page::CalcPageDown(HDC hdc, RECT *rc)\n" + (READER / "Page.cpp").read_text().split("void Page::CalcPageDown(HDC hdc, RECT *rc)\n",1)[1].split("void Page::CalcPageUp",1)[0])
+            + "void Page::CalcPageDown(HDC hdc, RECT *rc)\n" + (READER / "Page.cpp").read_text().split("void Page::CalcPageDown(HDC hdc, RECT *rc)\n",1)[1].split("void Page::CalcPageUp",1)[0]
+            + "void Page::CalcPageUp(HDC hdc, RECT *rc)\n" + (READER / "Page.cpp").read_text().split("void Page::CalcPageUp(HDC hdc, RECT *rc)\n",1)[1].split("int Page::GetMaxPageLength",1)[0])
         cls.binary = work / "reader-paint-test"
         flags = shlex.split(os.environ.get("READER_LIBRARY_TEST_FLAGS", ""))
         result = subprocess.run([*compiler,"-std=c++14","-Wall","-Wextra","-g",*flags,"-I"+str(work),
@@ -55,11 +56,37 @@ class PaintBoundaryTests(unittest.TestCase):
     def test_actual_pagination_keeps_anchor_when_reflow_cannot_fit_a_glyph(self):
         self.run_case("reflow")
 
+    def test_actual_pagination_uses_inset_dimensions_once_in_both_directions(self):
+        self.run_case("insets")
+
     def test_actual_chapter_sync_does_not_select_scroll_or_activate(self):
         self.run_case("sync")
 
 
 class UiSourceContractTests(unittest.TestCase):
+    def test_reading_insets_align_text_cover_pdf_and_editor_without_extra_margins(self):
+        reader=(READER/"Reader.cpp").read_text()
+        paint=reader.split("LRESULT OnPaint(HWND hWnd, HDC hdc)\n",1)[1].split("VOID Invalidate",1)[0]
+        self.assertIn("ReaderReadingContentRect(page, GetWindowDpiCompat(_hReadingView), _header->internal_border)",paint)
+        self.assertIn("IntersectClipRect(buffer, content.left, content.top, content.right, content.bottom)",paint)
+        self.assertIn("DrawPage(hWnd, buffer, &content, FALSE)",paint)
+        self.assertIn("DrawLoading(buffer, content)",paint)
+        self.assertNotIn("InflateRect",paint)
+        self.assertIn("rc.left + (rc.right - rc.left - width) / 2",reader)
+        page=(READER/"Page.cpp").read_text()
+        for coordinate in ("y = rc->top;","x = rc->left + p_line->x;","dst.X = rc->left + (w - bw)/2;","dst.Y = rc->top + (h - bh)/2;"):
+            self.assertIn(coordinate,page)
+        self.assertNotIn("m_header->internal_border",page)
+        pdf=(READER/"PdfBook.cpp").read_text()
+        self.assertIn("SetDIBitsToDevice(target,rect->left,rect->top,width,height",pdf)
+        self.assertIn("rect->left+frame->left",pdf);self.assertIn("rect->top+frame->top",pdf)
+        self.assertNotIn("InflateRect(&text",pdf)
+        editor=(READER/"Editctrl.cpp").read_text()
+        self.assertEqual(editor.count("    UpdateEditorContentRect();"),2)
+        self.assertIn("ReaderReadingContentRect(client, GetWindowDpiCompat(g_hEditCtrl), _header->internal_border)",editor)
+        self.assertIn("EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0",editor)
+        self.assertIn("sidebar&&!compact?ReaderSidebarPadding(dpi):",(READER/"Theme.cpp").read_text())
+
     def test_scrollbars_region_routing_full_labels_and_splitter_cancel(self):
         reader = (READER / "Reader.cpp").read_text()
         self.assertNotIn("TVS_NOHSCROLL",reader)

@@ -128,7 +128,7 @@ void PdfBook::DrawPage(HWND window,HDC dc,RECT* rect,BOOL enableAlpha)
     else
     {
         HBRUSH brush=CreateSolidBrush(ThemeColors().surface);FillRect(target,rect,brush);DeleteObject(brush);SetTextColor(target,ThemeColors().text);SetBkMode(target,TRANSPARENT);
-        RECT text=*rect;InflateRect(&text,-12,-12);
+        RECT text=*rect;
         DrawText(target,error?L"PDF 页面无法呈现，尝试翻页或重新打开。":L"正在呈现 PDF 页面…",-1,&text,DT_CENTER|DT_WORDBREAK);
     }
 }

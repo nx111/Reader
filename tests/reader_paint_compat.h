@@ -28,7 +28,20 @@ using HFONT = GdiObject*;
 using HDC = FakeDC*;
 static FakeBitmap originalBitmap(0, 0);
 static GdiObject originalFont(GdiObject::font);
-struct FakeDC { HGDIOBJ bitmap = &originalBitmap, font = &originalFont; };
+struct FakeDC {
+    HGDIOBJ bitmap = &originalBitmap, font = &originalFont;
+    RECT clip={0,0,1000000,1000000}; std::vector<RECT> saved;
+};
+inline int SaveDC(HDC dc) { dc->saved.push_back(dc->clip);return (int)dc->saved.size(); }
+inline int IntersectClipRect(HDC dc,int left,int top,int right,int bottom)
+{
+    dc->clip={(std::max)(dc->clip.left,left),(std::max)(dc->clip.top,top),
+              (std::min)(dc->clip.right,right),(std::min)(dc->clip.bottom,bottom)};return 1;
+}
+inline BOOL RestoreDC(HDC dc,int saved)
+{
+    assert(saved>0&&saved<=(int)dc->saved.size());dc->clip=dc->saved[saved-1];dc->saved.resize(saved-1);return TRUE;
+}
 static std::vector<HDC> liveDCs;
 static int createdDCs = 0, deletedDCs = 0, createdDIBs = 0, deletedDIBs = 0;
 static bool failDIB = false;
@@ -56,7 +69,7 @@ inline void DeleteObject(HGDIOBJ object)
 }
 inline void DeleteDC(HDC dc)
 {
-    assert(dc->bitmap == &originalBitmap && dc->font == &originalFont);
+    assert(dc->bitmap == &originalBitmap && dc->font == &originalFont && dc->saved.empty());
     liveDCs.erase(std::find(liveDCs.begin(),liveDCs.end(),dc)); ++deletedDCs; delete dc;
 }
 inline HBRUSH CreateSolidBrush(COLORREF) { return new GdiObject(GdiObject::brush); }

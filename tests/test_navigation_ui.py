@@ -30,6 +30,7 @@ class NavigationLayoutTests(unittest.TestCase):
     def test_alt_f10_arrow_activation_repeat_escape_and_altgr(self):self.run_case("keys")
     def test_all_monochrome_vectors_have_bounded_nonempty_strokes(self):self.run_case("icons")
     def test_light_dark_selected_hover_pressed_disabled_palette(self):self.run_case("colors")
+    def test_reading_insets_match_sidebar_dpi_and_preserve_custom_minimums(self):self.run_case("reading_insets")
     def test_pdf_fit_zoom_scroll_and_resize_preserve_normalized_anchor(self):self.run_case("pdf_geometry")
     def test_pdf_history_preserves_same_page_viewport_jumps(self):self.run_case("pdf_history")
     def test_bookmark_export_unicode_notes_markdown_escape_and_empty_book(self):self.run_case("export")

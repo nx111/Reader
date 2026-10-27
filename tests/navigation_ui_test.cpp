@@ -2,6 +2,7 @@
 #include "ReaderIcons.h"
 #include "ThemePalette.h"
 #include "PdfLayout.h"
+#include "ReaderInteraction.h"
 #include "BookmarkExport.h"
 #include <cassert>
 #include <string>
@@ -76,12 +77,37 @@ int main(int argc,char** argv)
             assert(ReaderFlatControlColors(p,false,false,false).ink==p.disabled);
             assert(p.surface!=p.text&&p.window!=p.selected&&p.hover!=p.pressed);
         }
-    else if(test=="pdf_geometry")
-        for(int dpi:{96,120,144,192})
+    else if(test=="reading_insets")
+    {
+        struct Rect {int left,top,right,bottom;};
+        const int dpis[]={96,120,144,168,192},expected[]={28,36,42,50,56};
+        for(int i=0;i<5;++i)
         {
-            int w=ReaderScale(300,dpi),h=ReaderScale(400,dpi);
+            int dpi=dpis[i],pad=ReaderReadingPadding(dpi);
+            assert(pad==expected[i]&&pad==2*ReaderSidebarPadding(dpi));
+            auto content=ReaderReadingContentRect(Rect{100,200,1100,1000},dpi,Rect{});
+            assert(content.left==100+pad&&content.top==200+pad&&content.right==1100-pad&&content.bottom==1000-pad);
+            // Legacy custom values are not added on top; larger explicit values survive.
+            content=ReaderReadingContentRect(Rect{0,0,1000,800},dpi,Rect{5,90,pad,110});
+            assert(content.left==pad&&content.top==90&&content.right==1000-pad&&content.bottom==690);
+            for(int w:{0,1,2,3,40,100}) for(int h:{0,1,2,3,40,100})
+            {
+                auto tiny=ReaderReadingContentRect(Rect{0,0,w,h},dpi,Rect{-9,1000000,1000000,-9});
+                assert(tiny.left>=0&&tiny.right<=w&&tiny.top>=0&&tiny.bottom<=h);
+                assert(tiny.right-tiny.left>=(w?1:0)&&tiny.bottom-tiny.top>=(h?1:0));
+            }
+        }
+    }
+    else if(test=="pdf_geometry")
+        for(int dpi:{96,120,144,168,192})
+        {
+            struct Rect {int left,top,right,bottom;};
+            auto content=ReaderReadingContentRect(Rect{0,0,ReaderScale(300,dpi),ReaderScale(400,dpi)},dpi,Rect{});
+            int w=content.right-content.left,h=content.bottom-content.top;
             auto fit=ReaderPdfLayout(300,600,w,h,0,dpi,0,500000);
-            assert(fit.pageWidth<w&&fit.maxX==0&&fit.maxY>0&&fit.top<0);
+            assert(abs(fit.pageWidth-w)<=1&&fit.maxX==0&&fit.maxY>0&&fit.top<0);
+            assert(content.left+fit.left>=ReaderReadingPadding(dpi));
+            assert(content.left+fit.left+fit.pageWidth<=content.right);
             auto page=ReaderPdfLayout(300,600,w,h,-1,dpi,0,0);assert(page.maxX==0&&page.maxY==0);
             auto zoom=ReaderPdfLayout(300,600,w,h,200,dpi,500000,500000);assert(zoom.maxX>0&&zoom.maxY>0);
             assert(abs(ReaderPdfNormalize(-zoom.top,zoom.pageHeight)-500000)<10000);

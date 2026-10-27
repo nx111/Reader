@@ -142,7 +142,7 @@ static void DrawLoading(HDC dc, const RECT& rc)
     scale = (std::min)(1.0, scale);
     int width = (int)(_loading->image->GetWidth() * scale), height = (int)(_loading->image->GetHeight() * scale);
     Gdiplus::Graphics graphics(dc);
-    graphics.DrawImage(_loading->image, (rc.right - width) / 2, (rc.bottom - height) / 2, width, height);
+    graphics.DrawImage(_loading->image, rc.left + (rc.right - rc.left - width) / 2, rc.top + (rc.bottom - rc.top - height) / 2, width, height);
 }
 
 static LRESULT CALLBACK ReadingProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
@@ -2852,21 +2852,25 @@ LRESULT OnPaint(HWND hWnd, HDC hdc)
     HBRUSH brush = CreateSolidBrush(colors.background); FillRect(buffer, &page, brush); DeleteObject(brush);
     Gdiplus::Bitmap* image = LoadBGImage(page.right, page.bottom);
     if (image) { Gdiplus::Graphics graphics(buffer); graphics.DrawImage(image, 0, 0, page.right, page.bottom); }
+    RECT content = ReaderReadingContentRect(page, GetWindowDpiCompat(_hReadingView), _header->internal_border);
+    int saved = SaveDC(buffer);
+    IntersectClipRect(buffer, content.left, content.top, content.right, content.bottom);
     if (_Book && !_Book->IsLoading())
     {
         PrepareReadingJump(hWnd);
-        _Book->DrawPage(hWnd, buffer, &page, FALSE);
+        _Book->DrawPage(hWnd, buffer, &content, FALSE);
         FinishReadingJump();
     }
     if (!_Book && !(_loading && _loading->enable))
     {
-        RECT empty = page; InflateRect(&empty, -12, -12);
+        RECT empty = content;
         HGDIOBJ previous = SelectObject(buffer, _readerUIFont);
         SetBkMode(buffer, TRANSPARENT); SetTextColor(buffer, colors.text);
         DrawText(buffer, _T("从“书库”添加电子书，或直接打开原文件。\nCtrl+L 书库 · Ctrl+T 目录 · F8 专注"), -1, &empty, DT_CENTER | DT_WORDBREAK);
         SelectObject(buffer, previous);
     }
-    DrawLoading(buffer, page);
+    DrawLoading(buffer, content);
+    RestoreDC(buffer, saved);
     BitBlt(hdc, 0, 0, page.right, page.bottom, buffer, 0, 0, SRCCOPY);
     UpdateProgess(); UpdateTitle(hWnd); SyncCurrentChapter();
     return 0;

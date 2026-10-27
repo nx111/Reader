@@ -6,10 +6,6 @@
 #define CHAR_GAP                (m_header->char_gap)
 #define LINE_GAP                (m_header->line_gap)
 #define PART_GAP                (m_header->paragraph_gap)
-#define LEFT_MIN                (m_header->internal_border.left)
-#define TOP_MIN                 (m_header->internal_border.top)
-#define RIGHT_MIN               (m_header->internal_border.right)
-#define BOTTOM_MIN              (m_header->internal_border.bottom)
 #define NO_BLANS_LINE           (m_header->blank_lines)
 #define LINE_INDENT             (m_header->line_indent)
 #define WORD_WRAP               (m_header->word_wrap)
@@ -176,8 +172,11 @@ void Page::DrawPage(HWND hWnd, HDC hdc, RECT* rc, BOOL enable_alpha)
     if (!OnDrawPageEvent(hWnd))
         return;
 
+    RECT local = *rc;
     if (enable_alpha)
     {
+        OffsetRect(&local, -local.left, -local.top);
+        rc = &local;
         int width = rc->right - rc->left, height = rc->bottom - rc->top;
         if (!m_AlphaSurface.Ensure(hdc, width, height)) return;
         hdc = m_AlphaSurface.DC();
@@ -222,11 +221,11 @@ void Page::DrawPage(HWND hWnd, HDC hdc, RECT* rc, BOOL enable_alpha)
     m_DrawType = DRAW_NULL;
     m_LineCount = 0;
 
-    y = TOP_MIN;
+    y = rc->top;
     for (i = 0; i < m_PageInfo.lines.used; i++)
     {
         p_line = &m_PageInfo.lines.lines[i];
-        x = LEFT_MIN + p_line->x;
+        x = rc->left + p_line->x;
         for (j = 0; j < p_line->char_cnt; j++)
         {
             p_char = &p_line->chars[j];
@@ -443,8 +442,8 @@ BOOL Page::DrawCover(HDC hdc, RECT* rc)
     src.Y = 0;
     src.Width = cover->GetWidth();
     src.Height = cover->GetHeight();
-    dst.X = (w - bw)/2;
-    dst.Y = (h - bh)/2;
+    dst.X = rc->left + (w - bw)/2;
+    dst.Y = rc->top + (h - bh)/2;
     dst.Width = bw;
     dst.Height = bh;
     Gdiplus::Bitmap* alphaTarget = NULL;
@@ -1009,8 +1008,8 @@ void Page::ReleasePageInfo(void)
 
 void Page::CalcPageDown(HDC hdc, RECT *rc)
 {
-    int width = rc->right - rc->left - LEFT_MIN - RIGHT_MIN;
-    int height = rc->bottom - rc->top - TOP_MIN - BOTTOM_MIN;
+    int width = rc->right - rc->left;
+    int height = rc->bottom - rc->top;
     int start_pos, length;
     int is_blank_line = 1;
     int remain_blank_length = 0;
@@ -1202,8 +1201,8 @@ void Page::CalcPageDown(HDC hdc, RECT *rc)
 
 void Page::CalcPageUp(HDC hdc, RECT *rc)
 {
-    int width = rc->right - rc->left - LEFT_MIN - RIGHT_MIN;
-    int height = rc->bottom - rc->top - TOP_MIN - BOTTOM_MIN;
+    int width = rc->right - rc->left;
+    int height = rc->bottom - rc->top;
     int start_pos, length;
     int is_blank_line = 1;
     int check_remain_blank = 1;
@@ -1513,8 +1512,8 @@ void Page::TestCase(RECT* rc)
     int w, h, i, j, l, v1, v2, v3, h1, w1;
     line_info_t *p_line;
     char_info_t *p_char;
-    w = rc->right - rc->left - LEFT_MIN - RIGHT_MIN;
-    h = rc->bottom - rc->top - TOP_MIN - BOTTOM_MIN;
+    w = rc->right - rc->left;
+    h = rc->bottom - rc->top;
 
     if (m_PageInfo.lines.used <= 0)
         return;
