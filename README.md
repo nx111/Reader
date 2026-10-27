@@ -1,17 +1,18 @@
 # Reader
-A Win32 text, EPUB, Mobipocket/Kindle and online file reader
+A lightweight Win32 text, EPUB, Mobipocket/Kindle, PDF and online file reader
 
 ## 本地书库与阅读导航
 
-支持批量索引原文件、失联记录重新关联、搜索筛选排序、多选管理、正文搜索结果与高亮、书签章名和摘要、可折叠联动目录、返回／前进导航；保留旧进度和书签并备份迁移缓存。`Ctrl+L` 打开书库，`Ctrl+T` 切换目录，`F8` 专注。详见 [使用与迁移说明](doc/library-usability.md)。
+采用左侧图标＋文字导航，支持批量索引原文件、失联记录重新关联、搜索筛选排序、多选管理、搜索结果与高亮、书签章名／摘要／可选备注与本地导出、联动目录和返回／前进；保留旧进度和书签并备份迁移缓存。`Ctrl+L` 打开书库，`Ctrl+T` 切换目录，`F8` 专注。详见 [使用与迁移说明](doc/library-usability.md) 和 [左侧导航、轻量取舍及 PDF](doc/left-navigation-pdf.md)。
 
 ## 本地电子书格式支持
 - 支持 TXT、EPUB，以及现有 libmobi 可解析的无 DRM MOBI / KF8 容器：`.mobi`、`.azw3`、`.azw`、`.prc`。
 - `.pdb` 仅支持 libmobi 可解析的 PalmDoc 文本电子书，不支持任意 Palm 数据库；`.prc` 也不支持 Palm 应用程序。无 MOBI 编码头的旧 PalmDoc 按 CP1252 解码，纯文本保留字面标签/实体，明确的 HTML 文档沿用 HTML 阅读方式。
+- PDF 使用同目录的固定版本 PDFium，支持真实页面（包括扫描件）、翻页／页内滚动、缩放／适宽、续读和页书签；内嵌目录和当前页文本搜索可用，不包含 OCR、全文搜索或密码输入。DLL 与完整第三方 notices 随便携包分发，不在运行时下载组件。
 - 网络版还保留 `.ol`、`.web` 在线书籍配置；无网络版不提供这两种入口。
 - 上述格式均可通过打开文件对话框、拖拽、命令行或历史记录打开；扩展名大小写不敏感（如 `.AZW3`、`.PRC`）。
 - 正文、目录和封面使用 Reader 现有的文本阅读方式，不保留完整 HTML/CSS 排版。
-- 不支持 DRM 加密书籍、KFX、AZW4 / Print Replica、Topaz、PDF、CBZ 或 FB2；修改扩展名不能转换文件格式。
+- 不支持 DRM 加密书籍、KFX、AZW4 / Print Replica、Topaz、CBZ 或 FB2；修改扩展名不能转换文件格式。
 
 最新release版本：　`v2.0.0.4`
 版本描述  | 下载地址

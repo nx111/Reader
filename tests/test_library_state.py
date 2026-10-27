@@ -23,7 +23,7 @@ class LibraryStateTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         work = Path(cls.temp.name)
         for name in ["Cache.cpp", "Cache.h", "Jsondata.cpp", "Jsondata.h", "types.h",
-                     "Keyset.h", "Utils.h", "Upgrade.h", "DPIAwareness.h", "LibraryModel.h", "ReadingState.h", "BookmarkData.h", "SearchDlg.h", "ReaderText.h", "ThemePalette.h"]:
+                     "Keyset.h", "Utils.h", "Upgrade.h", "DPIAwareness.h", "LibraryModel.h", "ReadingState.h", "BookmarkData.h", "SearchDlg.h", "ReaderText.h", "ThemePalette.h", "CommandIds.h"]:
             shutil.copy2(ROOT / "Reader" / name, work / name)
         # POSIX exposes overloads for strcasestr; the untouched Windows declaration
         # is unused by these tests and cannot coexist with that host declaration.
@@ -110,6 +110,9 @@ class LibraryStateTests(unittest.TestCase):
 
     def test_invalid_bookmark_metadata_never_overwrites_cache(self):
         self.run_case("bookmark_invalid")
+
+    def test_notes_pdf_view_v4_migration_invalid_values_and_relink_preserve_data(self):
+        self.run_case("notes_pdf")
 
     def test_batch_state_is_idempotent_and_removal_preserves_files_and_anchors(self):
         self.run_case("batch")

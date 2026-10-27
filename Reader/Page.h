@@ -76,14 +76,14 @@ public:
     void Rebind(int* index, header_t* header) { m_pIndex = index; m_header = header; }
     void ResetLayout() { m_DrawType = DRAW_NULL; m_LineCount = 0; }
     virtual void SetReadingPosition(int position);
-    void SetSearchHighlight(int position, int length) { m_SearchStart = position; m_SearchLength = length; }
+    virtual void SetSearchHighlight(int position, int length) { m_SearchStart = position; m_SearchLength = length; }
     void PageUp(HWND hWnd, BOOL draw = TRUE);
     void PageDown(HWND hWnd, BOOL draw = TRUE);
     void LineUp(HWND hWnd, BOOL draw = TRUE);
     void LineDown(HWND hWnd, BOOL draw = TRUE);
-    void DrawPage(HWND hWnd, HDC hdc, RECT *rc, BOOL enable_alpha);
+    virtual void DrawPage(HWND hWnd, HDC hdc, RECT *rc, BOOL enable_alpha);
     void ReDraw(HWND hWnd);
-    HDC AlphaDC() const { return m_AlphaSurface.DC(); }
+    virtual HDC AlphaDC() const { return m_AlphaSurface.DC(); }
     int  GetPageLength(void);
     int  GetTextLength(void);
     BOOL IsFirstPage(void);
@@ -92,7 +92,7 @@ public:
     double GetProgress(void);
     BOOL GetCurPageText(TCHAR **text);
     BOOL SetCurPageText(HWND hWnd, TCHAR *text);
-    BOOL IsBlankPage(void);
+    virtual BOOL IsBlankPage(void);
 
 protected:
     BOOL DrawCover(HDC hdc, RECT *rc);

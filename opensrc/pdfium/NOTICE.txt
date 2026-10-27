@@ -1,0 +1,15 @@
+Reader uses PDFium 158.0.8125.0 for fixed-page PDF rendering.
+PDFium is copyright The PDFium Authors; the binary packaging scripts are
+copyright Benoit Blanchon. This is a third-party build, not a Google binary.
+
+This software is based in part on the work of the FreeType Team.
+FreeType is used under the FreeType Project License (FTL).
+
+Keep LICENSE, licenses/* and this notice with redistributed Reader packages.
+licenses/ contains the complete upstream notices for PDFium and its included
+Abseil, AGG, Dragonbox, fast_float, FreeType, HarfBuzz, Highway, ICU, lcms,
+libjpeg-turbo, libopenjpeg, libpng, llvm-libc, simdutf and zlib components.
+The Reader application retains its own original author's terms.
+
+Dependency source, checksums, build flags and verified signing identity are
+recorded in dependency.json, args-win-*.gn and attestation.json.

@@ -8,3 +8,5 @@ void EC_LeaveEditMode(void);
 BOOL EC_IsEditMode(void);
 
 #endif
+
+void EC_UpdateReadingRect(const RECT* rect);

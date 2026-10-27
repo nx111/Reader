@@ -46,6 +46,17 @@
     <ClInclude Include="LibraryModel.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ReadingState.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Theme.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="BookmarkActions.h" />
+    <ClInclude Include="BookmarkExport.h" />
+    <ClInclude Include="PdfBook.h" />
+    <ClInclude Include="PdfEngine.h" />
+    <ClInclude Include="PdfLayout.h" />
+    <ClInclude Include="NavigationPane.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="CommandIds.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="NavigationLayout.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ReaderIcons.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="DrawReaderIcon.h"><Filter>Header Files</Filter></ClInclude>
+
     <ClInclude Include="ThemePalette.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="GdiSurface.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Cache.h">
@@ -115,6 +126,10 @@
   <ItemGroup>
     <ClCompile Include="SearchDlg.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="LibraryDlg.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="BookmarkActions.cpp" />
+    <ClCompile Include="PdfBook.cpp" />
+    <ClCompile Include="PdfEngine.cpp" />
+    <ClCompile Include="NavigationPane.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Theme.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Reader.cpp">
       <Filter>Source Files</Filter>

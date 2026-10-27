@@ -132,7 +132,16 @@ class UiSourceContractTests(unittest.TestCase):
         workflow = ROOT / ".github/workflows/build-package.yml"
         old = subprocess.check_output(["git","show","HEAD:.github/workflows/build-package.yml"],cwd=ROOT,text=True)
         expected = old.replace("actions/checkout@v4","actions/checkout@v7").replace("actions/upload-artifact@v4","actions/upload-artifact@v7").replace("microsoft/setup-msbuild@v2","microsoft/setup-msbuild@v3")
-        self.assertEqual(workflow.read_text(),expected)
+        actual = workflow.read_text()
+        for action in ("actions/checkout@v7", "actions/upload-artifact@v7", "microsoft/setup-msbuild@v3"):
+            self.assertIn(action, actual)
+        for argument in ("/p:Configuration=Release", "/p:PlatformToolset=v143", "/p:WindowsTargetPlatformVersion=10.0"):
+            self.assertIn(argument, actual)
+        self.assertIn("scripts/fetch-pdfium.ps1", actual)
+        self.assertIn("platform: Win32", actual); self.assertIn("platform: x64", actual)
+        self.assertIn("pdfium.dll", actual); self.assertIn("opensrc/pdfium/licenses", actual)
+        self.assertNotIn("permissions:", actual); self.assertNotIn("secrets.", actual)
+        self.assertNotIn("ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION", actual)
         ns={"m":"http://schemas.microsoft.com/developer/msbuild/2003"}
         for project in ("Reader.vcxproj","Reader.vcxproj.filters"):
             root=ET.parse(READER/project).getroot()

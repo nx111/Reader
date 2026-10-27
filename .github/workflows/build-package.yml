@@ -10,6 +10,15 @@ on:
 jobs:
   build-x64:
     runs-on: windows-2022
+    strategy:
+      matrix:
+        include:
+          - platform: x64
+            arch: x64
+            output: x64/Release
+          - platform: Win32
+            arch: x86
+            output: Release
 
     steps:
       - name: Check out source
@@ -18,12 +27,16 @@ jobs:
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v3
 
-      - name: Build x64 Release
+      - name: Verify app-local PDFium
+        shell: pwsh
+        run: ./scripts/fetch-pdfium.ps1 -Architecture ${{ matrix.arch }}
+
+      - name: Build Release
         shell: pwsh
         run: >-
           msbuild Reader.sln /m /t:Rebuild
           /p:Configuration=Release
-          /p:Platform=x64
+          /p:Platform=${{ matrix.platform }}
           /p:PlatformToolset=v143
           /p:WindowsTargetPlatformVersion=10.0
 
@@ -32,13 +45,20 @@ jobs:
         shell: pwsh
         run: |
           $shortSha = '${{ github.sha }}'.Substring(0, 7)
-          $packageName = "Reader_custom_x64_$shortSha"
+          $packageName = "Reader_custom_${{ matrix.arch }}_$shortSha"
           $packageDir = Join-Path $env:RUNNER_TEMP $packageName
           New-Item -ItemType Directory -Force $packageDir | Out-Null
-          Copy-Item -LiteralPath 'x64\Release\Reader.exe' -Destination $packageDir
+          Copy-Item -LiteralPath '${{ matrix.output }}/Reader.exe' -Destination $packageDir
           Copy-Item -LiteralPath 'readme.txt' -Destination $packageDir
+          Copy-Item -LiteralPath '.deps/pdfium/${{ matrix.arch }}/pdfium.dll' -Destination $packageDir
+          $notices = Join-Path $packageDir 'licenses/pdfium'
+          New-Item -ItemType Directory -Force $notices | Out-Null
+          Copy-Item -LiteralPath 'opensrc/pdfium/LICENSE' -Destination $notices
+          Copy-Item -LiteralPath 'opensrc/pdfium/NOTICE.txt' -Destination $notices
+          Copy-Item -LiteralPath 'opensrc/pdfium/licenses' -Destination $notices -Recurse
+          Copy-Item -LiteralPath 'opensrc/pdfium/dependency.json' -Destination $notices
           New-Item -ItemType Directory -Force 'dist' | Out-Null
-          & '.\tool\7z.exe' a "dist\$packageName.7z" "$packageDir\Reader.exe" "$packageDir\readme.txt"
+          & '.\tool\7z.exe' a "dist\$packageName.7z" "$packageDir\*"
           "name=$packageName" >> $env:GITHUB_OUTPUT
 
       - name: Upload package

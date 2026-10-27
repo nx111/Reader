@@ -1,4 +1,5 @@
 #include "Theme.h"
+#include "DrawReaderIcon.h"
 #include <algorithm>
 #include "DPIAwareness.h"
 #include <uxtheme.h>
@@ -37,6 +38,30 @@ std::wstring Text(HWND window)
 void PaintButton(HWND window, HDC dc, WindowData* data)
 {
     RECT rect; GetClientRect(window, &rect);
+    bool sidebar = GetProp(window,L"ReaderSidebarItem") != NULL;
+    ReaderIcon icon = (ReaderIcon)(INT_PTR)GetProp(window,L"ReaderIcon");
+    bool flatIcon = GetProp(window,L"ReaderFlatIcon") != NULL;
+    if (sidebar || flatIcon)
+    {
+        bool enabled=IsWindowEnabled(window)!=FALSE, focus=GetFocus()==window;
+        LRESULT state=SendMessage(window,BM_GETSTATE,0,0);
+        bool selected=sidebar && (SendMessage(window,BM_GETCHECK,0,0)==BST_CHECKED);
+        auto colors=ReaderFlatControlColors(palette,enabled,data->hot,(state&BST_PUSHED)!=0,selected);
+        Fill(dc,rect,colors.background); COLORREF color=colors.ink;
+        int dpi=GetWindowDpiCompat(window), size=MulDiv(sidebar?20:18,dpi,96);
+        bool compact=GetProp(window,L"ReaderCompact")!=NULL;
+        int left=sidebar&&!compact?MulDiv(14,dpi,96):(rect.right-size)/2;
+        RECT bounds={left,(rect.bottom-size)/2,left+size,(rect.bottom+size)/2}; DrawReaderIcon(dc,icon,bounds,color);
+        if(sidebar && !compact)
+        {
+            RECT label=rect; label.left=MulDiv(46,dpi,96); label.right-=MulDiv(10,dpi,96);
+            HFONT font=(HFONT)SendMessage(window,WM_GETFONT,0,0); auto previous=SelectObject(dc,font?font:GetStockObject(DEFAULT_GUI_FONT));
+            SetBkMode(dc,TRANSPARENT); SetTextColor(dc,color); std::wstring text=Text(window);
+            DrawText(dc,text.c_str(),-1,&label,DT_LEFT|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS); SelectObject(dc,previous);
+        }
+        if(focus) { RECT cue=rect; InflateRect(&cue,-MulDiv(3,dpi,96),-MulDiv(3,dpi,96)); DrawFocusRect(dc,&cue); }
+        return;
+    }
     LONG style = GetWindowLong(window, GWL_STYLE);
     int kind = style & BS_TYPEMASK;
     bool enabled = IsWindowEnabled(window) != FALSE;
@@ -112,6 +137,38 @@ void PaintStatus(HWND window, HDC dc)
     SelectObject(dc, previous);
 }
 
+// The reading trees are flat native lists. Custom-draw only their rows so the
+// current chapter uses the same neutral selection as the library, independent
+// of Windows' system highlight color. Hit testing, scrolling and accessibility
+// continue to use the original TreeView items and font metrics.
+LRESULT DrawReadingRow(HWND tree,NMTVCUSTOMDRAW* draw)
+{
+    HTREEITEM handle=(HTREEITEM)draw->nmcd.dwItemSpec;
+    bool current=(HTREEITEM)GetProp(tree,L"ReaderCurrentChapter")==handle;
+    bool selected=(draw->nmcd.uItemState&CDIS_SELECTED)!=0;
+    bool active=GetProp(tree,L"ReaderCurrentChapter")?current:selected;
+    RECT row=draw->nmcd.rc,client; GetClientRect(tree,&client); row.left=0;row.right=client.right;
+    int saved=SaveDC(draw->nmcd.hdc); IntersectClipRect(draw->nmcd.hdc,row.left,row.top,row.right,row.bottom);
+    COLORREF ink=!IsWindowEnabled(tree)?palette.disabled:active?palette.selectedText:palette.text;
+    Fill(draw->nmcd.hdc,row,active?palette.selected:selected?palette.hover:palette.surface);
+    std::vector<wchar_t> text(512,0); TVITEM item={};item.hItem=handle;item.mask=TVIF_TEXT;
+    for(;;)
+    {
+        item.pszText=text.data(); item.cchTextMax=(int)text.size();
+        if(!TreeView_GetItem(tree,&item) || wcslen(text.data())+1<text.size() || text.size()>=65536) break;
+        text.resize(text.size()*2,0);
+    }
+    RECT label=row; TreeView_GetItemRect(tree,handle,&label,TRUE);
+    label.top=row.top;label.bottom=row.bottom;
+    HFONT font=(HFONT)SendMessage(tree,WM_GETFONT,0,0); if(font) SelectObject(draw->nmcd.hdc,font);
+    SetBkMode(draw->nmcd.hdc,TRANSPARENT);SetTextColor(draw->nmcd.hdc,ink);
+    DrawText(draw->nmcd.hdc,text.data(),-1,&label,DT_LEFT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+    if(GetFocus()==tree && selected) { RECT cue=row;InflateRect(&cue,-3,-3);DrawFocusRect(draw->nmcd.hdc,&cue); }
+    int inset=MulDiv(12,GetWindowDpiCompat(tree),96);row.left=inset;row.right-=inset;row.top=row.bottom-1;
+    Fill(draw->nmcd.hdc,row,palette.border);RestoreDC(draw->nmcd.hdc,saved);
+    return CDRF_SKIPDEFAULT;
+}
+
 void RestoreMenu(HMENU menu)
 {
     for (auto it = menus.begin(); it != menus.end();)
@@ -185,7 +242,7 @@ bool DrawMenu(HWND window, UINT message, LPARAM parameter, LRESULT& result)
             auto previous = SelectObject(item->hDC, font); SetBkMode(item->hDC, TRANSPARENT);
             SetTextColor(item->hDC, item->itemState & (ODS_DISABLED | ODS_GRAYED) ? palette.disabled : selected ? palette.selectedText : palette.text);
             std::wstring label = data.text; size_t tab = label.find(L'\t');
-            DrawText(item->hDC, label.substr(0, tab).c_str(), -1, &text, DT_SINGLELINE | DT_VCENTER | (item->itemState & ODS_NOACCEL ? DT_HIDEPREFIX : 0));
+            DrawText(item->hDC, label.substr(0, tab).c_str(), -1, &text, DT_SINGLELINE | DT_VCENTER | (item->itemState & ODS_NOACCEL && !GetProp(window,L"ReaderMenuKeyboard") ? DT_HIDEPREFIX : 0));
             if (tab != std::wstring::npos) DrawText(item->hDC, label.substr(tab + 1).c_str(), -1, &text, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
             MENUITEMINFO menuItem = {}; menuItem.cbSize = sizeof(menuItem); menuItem.fMask = MIIM_SUBMENU | MIIM_BITMAP;
             GetMenuItemInfo(data.menu, data.position, TRUE, &menuItem);
@@ -202,6 +259,15 @@ bool DrawMenu(HWND window, UINT message, LPARAM parameter, LRESULT& result)
         }
     }
     DeleteObject(font); result = TRUE; return true;
+}
+
+HMENU WindowMenu(HWND window)
+{ HMENU menu=GetMenu(window); return menu?menu:(HMENU)GetProp(window,L"ReaderMainMenu"); }
+void PrepareWindowMenu(HWND window)
+{
+    HMENU menu=WindowMenu(window);
+    if(GetMenu(window)) PrepareMenu(menu);
+    else if(menu) for(int i=0;i<GetMenuItemCount(menu);++i) PrepareMenu(GetSubMenu(menu,i));
 }
 
 void Apply(HWND window, WindowData* data)
@@ -230,7 +296,7 @@ void Apply(HWND window, WindowData* data)
     if (ClassIs(data, TOOLTIPS_CLASS)) { SetWindowTheme(window, L"", L""); SendMessage(window, TTM_SETTIPBKCOLOR, palette.raised, 0); SendMessage(window, TTM_SETTIPTEXTCOLOR, palette.text, 0); }
     if (ClassIs(data, WC_BUTTON) || ClassIs(data, WC_COMBOBOX) || ClassIs(data, STATUSCLASSNAME) || ClassIs(data, WC_HEADER) || ClassIs(data, PROGRESS_CLASS)) SetWindowTheme(window, L"", L"");
     if (ClassIs(data, PROGRESS_CLASS)) { SendMessage(window, PBM_SETBKCOLOR, 0, palette.surface); SendMessage(window, PBM_SETBARCOLOR, 0, palette.accent); }
-    if (data->root) PrepareMenu(GetMenu(window));
+    if (data->root) PrepareWindowMenu(window);
     InvalidateRect(window, NULL, FALSE);
 }
 BOOL CALLBACK AttachChild(HWND window, LPARAM) { Attach(window, false); return TRUE; }
@@ -262,7 +328,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         bool editor = GetProp(child, L"ReaderReadingEditor") != NULL;
         bool field = message == WM_CTLCOLOREDIT || message == WM_CTLCOLORLISTBOX;
         SetBkMode(dc, TRANSPARENT); SetBkColor(dc, editor ? reading.background : field ? palette.surface : palette.window);
-        SetTextColor(dc, !IsWindowEnabled(child) ? palette.disabled : editor ? reading.text : palette.text);
+        SetTextColor(dc, !IsWindowEnabled(child) ? palette.disabled : editor ? reading.text : GetProp(child,L"ReaderMutedText") ? palette.muted : palette.text);
         return (LRESULT)(editor ? readingBrush : field ? surfaceBrush : windowBrush);
     }
     bool background = data->root && !GetProp(window, L"ReaderOwnBackground");
@@ -278,7 +344,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         }
     }
     if (message == WM_PARENTNOTIFY && LOWORD(wParam) == WM_CREATE) Attach((HWND)lParam, false);
-    if (message == WM_INITMENU || message == WM_INITMENUPOPUP) PrepareMenu((HMENU)wParam);
+    if (message == WM_INITMENU || message == WM_INITMENUPOPUP)
+    {
+        if ((HMENU)wParam == (HMENU)GetProp(window,L"ReaderMainMenu")) PrepareWindowMenu(window);
+        else PrepareMenu((HMENU)wParam);
+    }
     if (message == WM_MENUCHAR)
     {
         HMENU menu = (HMENU)lParam; int match = -1, count = 0;
@@ -330,7 +400,17 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         if (!_wcsicmp(type, WC_TREEVIEW) || !_wcsicmp(type, WC_LISTVIEW))
         {
             LRESULT inherited = DefSubclassProc(window, message, wParam, lParam);
+            if (draw->dwDrawStage==CDDS_ITEMPREPAINT && GetProp(from,L"ReaderReadingSidebar")) return DrawReadingRow(from,(NMTVCUSTOMDRAW*)lParam);
             if (draw->dwDrawStage == CDDS_PREPAINT) return inherited | CDRF_NOTIFYITEMDRAW;
+            if (draw->dwDrawStage == (CDDS_ITEMPREPAINT|CDDS_SUBITEM) && GetProp(from,L"ReaderLibraryList"))
+            {
+                auto list=(NMLVCUSTOMDRAW*)lParam; bool selected=(ListView_GetItemState(from,(int)draw->dwItemSpec,LVIS_SELECTED)&LVIS_SELECTED)!=0;
+                list->clrText=selected?palette.selectedText:list->iSubItem==0?palette.text:palette.muted;
+                list->clrTextBk=selected?palette.selected:palette.surface;
+                HFONT font=list->iSubItem==0?(HFONT)GetProp(from,L"ReaderTitleFont"):(HFONT)SendMessage(from,WM_GETFONT,0,0);
+                if(font) { SelectObject(draw->hdc,font); return inherited|CDRF_NEWFONT; }
+                return inherited;
+            }
             if (draw->dwDrawStage == CDDS_ITEMPREPAINT)
             {
                 bool selected = (draw->uItemState & CDIS_SELECTED) != 0;
@@ -341,7 +421,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 COLORREF background = active ? palette.selected : selected || (draw->uItemState & CDIS_HOT) ? palette.hover : palette.surface;
                 if (!_wcsicmp(type, WC_TREEVIEW)) { auto tree = (NMTVCUSTOMDRAW*)lParam; tree->clrText = foreground; tree->clrTextBk = background; }
                 else { auto list = (NMLVCUSTOMDRAW*)lParam; list->clrText = foreground; list->clrTextBk = background; }
+                // Only the paint flag changes; native selection, keyboard handling and
+                // accessibility state stay intact while palette colors replace system blue.
+                draw->uItemState &= ~CDIS_SELECTED;
             }
+            if (draw->dwDrawStage==CDDS_ITEMPREPAINT && GetProp(from,L"ReaderLibraryList")) return inherited|CDRF_NOTIFYSUBITEMDRAW;
             return inherited;
         }
     }
@@ -394,7 +478,7 @@ void ThemeConfigure(const header_t* settings)
 void ThemeAttachWindow(HWND window) { Attach(window, true); EnumChildWindows(window, AttachChild, 0); }
 void ThemeReleaseMenus(HWND window)
 {
-    HMENU root = GetMenu(window); if (!root) return;
+    HMENU root = WindowMenu(window); if (!root) return;
     std::vector<HMENU> pending(1, root);
     for (size_t i = 0; i < pending.size(); ++i)
     {
@@ -406,8 +490,8 @@ void ThemeReleaseMenus(HWND window)
 void ThemeUpdateMenu(HWND window)
 {
     DWORD_PTR data = 0;
-    if (GetWindowSubclass(window, WindowProc, subclassId, &data)) PrepareMenu(GetMenu(window));
-    DrawMenuBar(window);
+    if (GetWindowSubclass(window, WindowProc, subclassId, &data)) PrepareWindowMenu(window);
+    if (GetMenu(window)) DrawMenuBar(window);
 }
 void ThemeRefreshAll()
 {

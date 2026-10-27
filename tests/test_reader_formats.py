@@ -177,15 +177,15 @@ static int test_tcsicmp(const wchar_t *a, const wchar_t *b)
 ''' + mobi_helper.group(0) + "\n" + helper.group(0) + "\nstatic bool IsMobiExtension(const TCHAR *ext) { return " + mobi_conditions[0] + r'''; }
 int main()
 {
-    for (const auto ext : {L".txt", L".TXT", L".epub", L".EPUB", L".mobi", L".MOBI", L".azw3", L".AZW3", L".AzW3", L".azw", L".AZW", L".AzW", L".prc", L".PRC", L".PrC", L".pdb", L".PDB", L".PdB"})
+    for (const auto ext : {L".pdf", L".PDF", L".PdF", L".txt", L".TXT", L".epub", L".EPUB", L".mobi", L".MOBI", L".azw3", L".AZW3", L".AzW3", L".azw", L".AZW", L".AzW", L".prc", L".PRC", L".PrC", L".pdb", L".PDB", L".PdB"})
         assert(IsSupportedBookExtension(ext));
-    for (const auto ext : {L"", L".", L".kfx", L".pdf", L".cbz", L".fb2", L".azw4", L".tpz", L".azw3.zip", L"azw3", L".azw3 "})
+    for (const auto ext : {L"", L".", L".kfx", L".cbz", L".fb2", L".azw4", L".tpz", L".azw3.zip", L"azw3", L".azw3 "})
         assert(!IsSupportedBookExtension(ext));
     assert(!IsSupportedBookExtension(nullptr));
     assert(!IsMobiBookExtension(nullptr));
     for (const auto ext : {L".mobi", L".MOBI", L".azw3", L".AZW3", L".AzW3", L".azw", L".AZW", L".AzW", L".prc", L".PRC", L".PrC", L".pdb", L".PDB", L".PdB"})
         assert(IsMobiExtension(ext));
-    for (const auto ext : {L".txt", L".epub", L".ol", L".web", L".kfx", L".azw4", L".tpz", L".azw3.zip", L""})
+    for (const auto ext : {L".txt", L".epub", L".pdf", L".ol", L".web", L".kfx", L".azw4", L".tpz", L".azw3.zip", L""})
         assert(!IsMobiExtension(ext));
 #ifdef ENABLE_NETWORK
     assert(IsSupportedBookExtension(L".OL"));
@@ -206,7 +206,7 @@ int main()
         if (end == std::wstring::npos) break;
         begin = end + 1;
     }
-    std::set<std::wstring> expected = {L"*.txt", L"*.epub", L"*.mobi", L"*.azw3", L"*.azw", L"*.prc", L"*.pdb"};
+    std::set<std::wstring> expected = {L"*.pdf", L"*.txt", L"*.epub", L"*.mobi", L"*.azw3", L"*.azw", L"*.prc", L"*.pdb"};
 #ifdef ENABLE_NETWORK
     expected.insert(L"*.ol");
     expected.insert(L"*.web");

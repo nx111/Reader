@@ -54,13 +54,13 @@ def main():
                  "-D_M_X64", "-D_WIN32_WINNT=0x0601", "-D_CRT_SECURE_NO_WARNINGS",
                  "-DLIBXML_STATIC", "-DLIBHTTPS_STATIC", "-DCJSON_HIDE_SYMBOLS", "-DZLIB_WINAPI",
                  "-include", str(compatibility), "-I" + str(aliases), "-I" + str(source)]
-        for name in ("cjson", "zlib/inc", "libxml2/inc", "libhttps/inc", "miniz", "libmobi/inc"):
+        for name in ("pdfium/include", "cjson", "zlib/inc", "libxml2/inc", "libhttps/inc", "miniz", "libmobi/inc"):
             flags.append("-I" + str(ROOT / "opensrc" / name))
         if args.network:
             flags.append("-DENABLE_NETWORK")
         failed = False
         for name in ("Reader", "Book", "Cache", "Jsondata", "LibraryDlg", "SearchDlg", "Page", "WebBook", "Editctrl",
-                     "Advset", "DPIAwareness", "EpubBook", "HtmlParser", "Theme", "DisplaySet", "Keyset", "OnlineDlg", "WebDlg", "BooksourceDlg", "tagset"):
+                     "Advset", "DPIAwareness", "EpubBook", "HtmlParser", "Theme", "NavigationPane", "BookmarkActions", "PdfEngine", "PdfBook", "DisplaySet", "Keyset", "OnlineDlg", "WebDlg", "BooksourceDlg", "tagset"):
             result = subprocess.run([compiler, *flags, str(source / (name + ".cpp"))],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             print(name + ": " + ("FAIL" if result.returncode else "PASS"), flush=True)

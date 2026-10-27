@@ -250,7 +250,18 @@ BOOL Cache::relink_item(int id, const TCHAR* file_name, const TCHAR* key)
             if (i == other->mark_size && (mark == 0 || mark == merged.index)) continue;
             bool found = false;
             for (int j = 0; j < merged.mark_size; ++j)
-                if (merged.mark[j] == mark && records[j].chapter == detail.chapter) found = true;
+                if (merged.mark[j] == mark && records[j].chapter == detail.chapter)
+                {
+                    found = true;
+                    if (records[j].title.empty()) records[j].title = detail.title;
+                    if (records[j].summary.empty()) records[j].summary = detail.summary;
+                    if (records[j].note.empty()) records[j].note = detail.note;
+                    else if (!detail.note.empty() && records[j].note != detail.note)
+                    {
+                        if (records[j].note.size() + detail.note.size() + 5 > 500) return FALSE;
+                        records[j].note += L"\n---\n" + detail.note;
+                    }
+                }
             if (!found)
             {
                 if (merged.mark_size == MAX_MARK_COUNT) return FALSE; // Do not drop any marks.
@@ -433,6 +444,14 @@ bookmark_detail_t Cache::mark_detail(const item_t* item, int index) const
     if (found != m_bookmarks.end() && index < (int)found->second.size()
         && found->second[index].position == item->mark[index]) return found->second[index];
     return bookmark_detail_t(-1, item->mark[index]);
+}
+
+BOOL Cache::set_mark_note(item_t* item, int index, const std::wstring& note)
+{
+    if (!item || index < 0 || index >= item->mark_size || note.size() > 500) return FALSE;
+    std::vector<bookmark_detail_t> records;
+    for (int i = 0; i < item->mark_size; ++i) records.push_back(mark_detail(item, i));
+    records[index].note = note; m_bookmarks[item->id].swap(records); return TRUE;
 }
 
 BOOL Cache::add_mark(item_t* item, int value, const bookmark_detail_t* detail)

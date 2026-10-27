@@ -88,7 +88,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_CRT_SECURE_NO_WARNINGS;_CRT_NON_CONFORMING_SWPRINTFS;CJSON_HIDE_SYMBOLS;ZLIB_WINAPI;LIBXML_STATIC;LIBHTTPS_STATIC;ENABLE_NETWORK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>false</ConformanceMode>
-      <AdditionalIncludeDirectories>..\opensrc\cjson;..\opensrc\zlib\inc;..\opensrc\libxml2\inc;..\opensrc\libhttps\inc;..\opensrc\miniz;..\opensrc\libmobi\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\opensrc\pdfium\include;..\opensrc\cjson;..\opensrc\zlib\inc;..\opensrc\libxml2\inc;..\opensrc\libhttps\inc;..\opensrc\miniz;..\opensrc\libmobi\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -108,7 +108,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_CRT_SECURE_NO_WARNINGS;_CRT_NON_CONFORMING_SWPRINTFS;CJSON_HIDE_SYMBOLS;ZLIB_WINAPI;LIBXML_STATIC;LIBHTTPS_STATIC;ENABLE_NETWORK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>false</ConformanceMode>
-      <AdditionalIncludeDirectories>..\opensrc\cjson;..\opensrc\zlib\inc;..\opensrc\libxml2\inc;..\opensrc\libhttps\inc;..\opensrc\miniz;..\opensrc\libmobi\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\opensrc\pdfium\include;..\opensrc\cjson;..\opensrc\zlib\inc;..\opensrc\libxml2\inc;..\opensrc\libhttps\inc;..\opensrc\miniz;..\opensrc\libmobi\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -128,7 +128,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;_CRT_SECURE_NO_WARNINGS;_CRT_NON_CONFORMING_SWPRINTFS;CJSON_HIDE_SYMBOLS;ZLIB_WINAPI;LIBXML_STATIC;LIBHTTPS_STATIC;ENABLE_NETWORK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>..\opensrc\cjson;..\opensrc\zlib\inc;..\opensrc\libxml2\inc;..\opensrc\libhttps\inc;..\opensrc\miniz;..\opensrc\libmobi\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\opensrc\pdfium\include;..\opensrc\cjson;..\opensrc\zlib\inc;..\opensrc\libxml2\inc;..\opensrc\libhttps\inc;..\opensrc\miniz;..\opensrc\libmobi\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -148,7 +148,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;_CRT_SECURE_NO_WARNINGS;_CRT_NON_CONFORMING_SWPRINTFS;CJSON_HIDE_SYMBOLS;ZLIB_WINAPI;LIBXML_STATIC;LIBHTTPS_STATIC;ENABLE_NETWORK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>..\opensrc\cjson;..\opensrc\zlib\inc;..\opensrc\libxml2\inc;..\opensrc\libhttps\inc;..\opensrc\miniz;..\opensrc\libmobi\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\opensrc\pdfium\include;..\opensrc\cjson;..\opensrc\zlib\inc;..\opensrc\libxml2\inc;..\opensrc\libhttps\inc;..\opensrc\miniz;..\opensrc\libmobi\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <Optimization>MaxSpeed</Optimization>
     </ClCompile>
@@ -177,6 +177,17 @@
     <ClInclude Include="LibraryModel.h" />
     <ClInclude Include="ReadingState.h" />
     <ClInclude Include="Theme.h" />
+    <ClInclude Include="BookmarkActions.h" />
+    <ClInclude Include="BookmarkExport.h" />
+    <ClInclude Include="PdfBook.h" />
+    <ClInclude Include="PdfEngine.h" />
+    <ClInclude Include="PdfLayout.h" />
+    <ClInclude Include="NavigationPane.h" />
+    <ClInclude Include="CommandIds.h" />
+    <ClInclude Include="NavigationLayout.h" />
+    <ClInclude Include="ReaderIcons.h" />
+    <ClInclude Include="DrawReaderIcon.h" />
+
     <ClInclude Include="ThemePalette.h" />
     <ClInclude Include="GdiSurface.h" />
     <ClInclude Include="DisplaySet.h" />
@@ -224,6 +235,10 @@
     <ClCompile Include="OnlineBook.cpp" />
     <ClCompile Include="OnlineDlg.cpp" />
     <ClCompile Include="Page.cpp" />
+    <ClCompile Include="BookmarkActions.cpp" />
+    <ClCompile Include="PdfBook.cpp" />
+    <ClCompile Include="PdfEngine.cpp" />
+    <ClCompile Include="NavigationPane.cpp" />
     <ClCompile Include="Theme.cpp" />
     <ClCompile Include="Reader.cpp" />
     <ClCompile Include="tagset.cpp" />
@@ -269,4 +284,8 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <Target Name="CopyPdfium" AfterTargets="Build" Condition="Exists('$(ProjectDir)..\.deps\pdfium\x64\pdfium.dll') Or Exists('$(ProjectDir)..\.deps\pdfium\x86\pdfium.dll')">
+    <PropertyGroup><PdfiumArch Condition="'$(Platform)'=='x64'">x64</PdfiumArch><PdfiumArch Condition="'$(Platform)'!='x64'">x86</PdfiumArch></PropertyGroup>
+    <Copy SourceFiles="$(ProjectDir)..\.deps\pdfium\$(PdfiumArch)\pdfium.dll" DestinationFolder="$(OutDir)" Condition="Exists('$(ProjectDir)..\.deps\pdfium\$(PdfiumArch)\pdfium.dll')" />
+  </Target>
 </Project>

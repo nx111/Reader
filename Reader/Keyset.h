@@ -55,6 +55,7 @@ void KS_GetDefaultKeyset(keyset_t *keyset);
 void KS_OpenDlg(void);
 INT_PTR CALLBACK KS_DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 BOOL KS_KeyDownProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+BOOL KS_CustomKeyDownProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 BOOL KS_HotKeyProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 BOOL KS_RegisterAllHotKey(HWND hWnd);
 BOOL KS_UnRegisterAllHotKey(HWND hWnd);

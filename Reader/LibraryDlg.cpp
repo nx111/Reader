@@ -1,4 +1,8 @@
 #include "Theme.h"
+#include "NavigationLayout.h"
+#include "PdfEngine.h"
+#include "PdfBook.h"
+#include "DrawReaderIcon.h"
 #include "LibraryDlg.h"
 #include "LibraryModel.h"
 #include "ReaderText.h"
@@ -24,8 +28,13 @@
 namespace {
 enum { search_id = 47001, filter_id, add_id, folder_id, open_id, relink_id,
     favorite_id, read_id, remove_id, refresh_id, stop_id, list_id, status_id,
+    nav_all_id=47101, nav_reading_id, nav_read_id, nav_favorite_id, nav_missing_id,
     import_timer = 91, filter_timer = 92 };
 HWND library = NULL, list = NULL, search = NULL, filter = NULL, status = NULL;
+HWND sideTitle = NULL, sideButtons[5] = {}, tooltips = NULL;
+HFONT headingFont = NULL, titleFont = NULL;
+HIMAGELIST rowSpacing = NULL;
+ReaderLibraryGeometry layout = {};
 Cache* cache = NULL;
 std::vector<int> rows;
 std::map<int, bool> missing;
@@ -96,6 +105,13 @@ void ReadMetadata(item_t& item)
 {
     const TCHAR* ext = PathFindExtension(item.file_name);
     if (_tcsicmp(ext, _T(".txt")) == 0) return;
+    if (_tcsicmp(ext, L".pdf") == 0)
+    {
+        ReaderPdfDocument pdf;
+        if(pdf.Open(item.file_name,ReaderPdfLibraryPath()))
+        { if(!pdf.title.empty()) lstrcpyn(item.title,pdf.title.c_str(),256); if(!pdf.author.empty()) lstrcpyn(item.author,pdf.author.c_str(),256);item.text_length=pdf.pages; }
+        return;
+    }
     if (_tcsicmp(ext, _T(".epub")) == 0)
     {
         zlib_filefunc64_def functions = {};
@@ -381,7 +397,7 @@ std::vector<std::wstring> PickFiles(bool multi)
     std::vector<wchar_t> buffer(multi ? 65536 : MAX_PATH, 0);
     OPENFILENAME dialog = {};
     dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = library;
-    dialog.lpstrFilter = L"电子书\0*.txt;*.epub;*.mobi;*.azw3;*.azw;*.prc;*.pdb\0所有文件\0*.*\0\0";
+    dialog.lpstrFilter = L"电子书\0*.txt;*.epub;*.pdf;*.mobi;*.azw3;*.azw;*.prc;*.pdb\0所有文件\0*.*\0\0";
     dialog.lpstrFile = &buffer[0]; dialog.nMaxFile = (DWORD)buffer.size();
     dialog.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | (multi ? OFN_ALLOWMULTISELECT : 0);
     std::vector<std::wstring> result;
@@ -399,23 +415,43 @@ void ActivateSelected()
     if (missing[id])
     { MessageBox(library, L"原文件已失联。进度和书签仍保留，请使用“重新关联”。", L"本地书库", MB_OK | MB_ICONINFORMATION); return; }
     OpenLibraryBook(id);
-    SetForegroundWindow(GetWindow(library, GW_OWNER));
+    HWND owner=GetAncestor(library,GA_ROOT);SetForegroundWindow(owner);SetFocus(owner);
 }
 
+void SyncFilters()
+{
+    int selected=(int)SendMessage(filter,CB_GETCURSEL,0,0);
+    for(int i=0;i<5;++i) SendMessage(sideButtons[i],BM_SETCHECK,i==selected?BST_CHECKED:BST_UNCHECKED,0);
+}
+void UpdateVisualMetrics()
+{
+    if(headingFont) DeleteObject(headingFont); if(titleFont) DeleteObject(titleFont);
+    LOGFONT font={}; GetObject(uiFont,sizeof(font),&font); font.lfWeight=FW_SEMIBOLD;
+    titleFont=CreateFontIndirect(&font); font.lfHeight=-MulDiv(12,libraryDpi,72); headingFont=CreateFontIndirect(&font);
+    SendMessage(sideTitle,WM_SETFONT,(WPARAM)headingFont,TRUE); SetProp(list,L"ReaderTitleFont",titleFont);
+    HIMAGELIST previous=rowSpacing; rowSpacing=ImageList_Create(1,Scale(38),ILC_COLOR32,1,1);
+    ListView_SetImageList(list,rowSpacing,LVSIL_SMALL); if(previous) ImageList_Destroy(previous);
+}
 void Layout()
 {
-    RECT rc; GetClientRect(library, &rc);
-    const int gap = Scale(8), rowHeight = Scale(28), buttonWidth = Scale(86);
-    int filterWidth = Scale(115);
-    MoveWindow(search, gap, gap, (std::max)(20, (int)rc.right - filterWidth - gap * 3), rowHeight, TRUE);
-    MoveWindow(filter, (std::max)(gap, (int)rc.right - filterWidth - gap), gap, filterWidth, rowHeight * 8, TRUE);
-    const int buttons[] = { add_id, folder_id, open_id, relink_id, favorite_id, read_id, remove_id, refresh_id, stop_id };
-    int columns = (std::max)(1, ((int)rc.right - gap) / (buttonWidth + gap));
-    for (int i = 0; i < 9; ++i)
-        MoveWindow(GetDlgItem(library, buttons[i]), gap + i % columns * (buttonWidth + gap), gap * 2 + rowHeight + i / columns * (rowHeight + gap), buttonWidth, rowHeight, TRUE);
-    int top = gap * 3 + rowHeight + ((9 + columns - 1) / columns) * (rowHeight + gap);
-    MoveWindow(list, gap, top, (std::max)(1, (int)rc.right - gap * 2), (std::max)(1, (int)rc.bottom - top - rowHeight - gap * 2), TRUE);
-    MoveWindow(status, gap, (std::max)(top, (int)rc.bottom - rowHeight - gap), (std::max)(1, (int)rc.right - gap * 2), rowHeight, TRUE);
+    RECT rc; GetClientRect(library,&rc); layout=ReaderLibraryLayout(rc.right,rc.bottom,libraryDpi,false);
+    auto show=[](HWND child,bool visible) { if((IsWindowVisible(child)!=FALSE)!=visible) ShowWindow(child,visible?SW_SHOWNA:SW_HIDE); };
+    auto move=[](HWND child,int x,int y,int w,int h) { RECT old; GetWindowRect(child,&old); MapWindowPoints(NULL,library,(POINT*)&old,2);
+        if(old.left!=x || old.top!=y || old.right-old.left!=w || old.bottom-old.top!=h) SetWindowPos(child,NULL,x,y,(std::max)(1,w),(std::max)(1,h),SWP_NOACTIVATE|SWP_NOZORDER); };
+    move(sideTitle,Scale(20),Scale(20),layout.sidebarWidth-Scale(32),Scale(24));
+    for(int i=0;i<5;++i)
+    {
+        move(sideButtons[i],Scale(8),Scale(68+i*42),layout.sidebarWidth-Scale(16),Scale(38));
+        show(sideButtons[i],layout.sidebar);
+    }
+    show(sideTitle,layout.sidebar); show(filter,!layout.sidebar);
+    move(search,layout.left+Scale(30),layout.searchTop+Scale(5),layout.searchWidth-Scale(38),Scale(22));
+    if(!layout.sidebar) move(filter,layout.filterLeft,layout.searchTop,layout.filterWidth,Scale(240));
+    const int buttons[]={add_id,folder_id,open_id,relink_id,favorite_id,read_id,remove_id,refresh_id,stop_id};
+    for(int i=0;i<9;++i) move(GetDlgItem(library,buttons[i]),layout.left+(i%layout.actionColumns)*(layout.actionSize+layout.actionGap),layout.actionsTop+(i/layout.actionColumns)*(layout.actionSize+layout.actionGap),layout.actionSize,layout.actionSize);
+    move(list,layout.left,layout.listTop,layout.width,layout.listHeight);
+    move(status,layout.left,layout.statusTop,layout.width,Scale(24));
+    InvalidateRect(library,NULL,FALSE);
 }
 
 LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
@@ -430,7 +466,7 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0);
             metrics.lfMessageFont.lfHeight = -MulDiv(9, libraryDpi, 72); metrics.lfMessageFont.lfWidth = 0;
             uiFont = CreateFontIndirect(&metrics.lfMessageFont);
-            search = CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, window, (HMENU)search_id, NULL, NULL);
+            search = CreateWindowEx(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, window, (HMENU)search_id, NULL, NULL);
             SendMessage(search, EM_SETCUEBANNER, FALSE, (LPARAM)L"搜索书名、作者或路径");
             filter = CreateWindow(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, window, (HMENU)filter_id, NULL, NULL);
             const wchar_t* filters[] = { L"全部", L"在读", L"已读", L"收藏", L"失联" };
@@ -439,7 +475,7 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             const wchar_t* labels[] = { L"添加文件", L"添加文件夹", L"继续阅读", L"重新关联", L"收藏操作", L"阅读状态", L"移出书库", L"刷新", L"停止" };
             const int ids[] = { add_id, folder_id, open_id, relink_id, favorite_id, read_id, remove_id, refresh_id, stop_id };
             for (int i = 0; i < 9; ++i) CreateWindow(L"BUTTON", labels[i], WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, window, (HMENU)(INT_PTR)ids[i], NULL, NULL);
-            list = CreateWindowEx(WS_EX_CLIENTEDGE, WC_LISTVIEW, L"本地书库", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, 0, 0, 0, 0, window, (HMENU)list_id, NULL, NULL);
+            list = CreateWindowEx(0, WC_LISTVIEW, L"本地书库", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS, 0, 0, 0, 0, window, (HMENU)list_id, NULL, NULL);
             ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
             const wchar_t* titles[] = { L"书名", L"作者", L"格式", L"进度", L"最近阅读", L"状态", L"原文件" };
             const int widths[] = { 205, 120, 65, 110, 145, 100, 350 };
@@ -447,7 +483,35 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             { LVCOLUMN col = {}; col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM; col.pszText = (wchar_t*)titles[i]; col.cx = Scale(widths[i]); col.iSubItem = i; ListView_InsertColumn(list, i, &col); }
             status = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, (HMENU)status_id, NULL, NULL);
             for (HWND child = GetWindow(window, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) SendMessage(child, WM_SETFONT, (WPARAM)uiFont, TRUE);
-            SetBusy(false); Layout(); RefreshRows(); ThemeAttachWindow(window);
+            sideTitle=CreateWindow(L"STATIC",L"我的书库",WS_CHILD|SS_LEFT,0,0,1,1,window,NULL,NULL,NULL);
+            const wchar_t* navigation[]={L"全部藏书",L"正在阅读",L"已读",L"收藏",L"失联记录"};
+            const ReaderIcon icons[]={ReaderIcon::Library,ReaderIcon::Reading,ReaderIcon::Read,ReaderIcon::Favorite,ReaderIcon::Missing};
+            for(int i=0;i<5;++i)
+            {
+                sideButtons[i]=CreateWindow(L"BUTTON",navigation[i],WS_CHILD|WS_TABSTOP|BS_RADIOBUTTON|BS_PUSHLIKE|(i==0?WS_GROUP:0),0,0,1,1,window,(HMENU)(INT_PTR)(nav_all_id+i),NULL,NULL);
+                SendMessage(sideButtons[i],WM_SETFONT,(WPARAM)uiFont,FALSE); SetProp(sideButtons[i],L"ReaderSidebarItem",(HANDLE)1); SetProp(sideButtons[i],L"ReaderIcon",(HANDLE)(INT_PTR)icons[i]);
+            }
+            tooltips=CreateWindowEx(WS_EX_TOPMOST,TOOLTIPS_CLASS,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,0,0,0,0,window,NULL,NULL,NULL);
+            const ReaderIcon actions[]={ReaderIcon::AddFile,ReaderIcon::Folder,ReaderIcon::Open,ReaderIcon::Relink,ReaderIcon::Favorite,ReaderIcon::ReadState,ReaderIcon::Remove,ReaderIcon::Refresh,ReaderIcon::Stop};
+            for(int i=0;i<9;++i)
+            {
+                HWND button=GetDlgItem(window,ids[i]); SetProp(button,L"ReaderFlatIcon",(HANDLE)1); SetProp(button,L"ReaderIcon",(HANDLE)(INT_PTR)actions[i]);
+                TOOLINFO tip={}; tip.cbSize=sizeof(tip); tip.hwnd=window; tip.uFlags=TTF_IDISHWND|TTF_SUBCLASS; tip.uId=(UINT_PTR)button; tip.lpszText=(wchar_t*)labels[i];
+                SendMessage(tooltips,TTM_ADDTOOL,0,(LPARAM)&tip);
+            }
+            SetProp(status,L"ReaderMutedText",(HANDLE)1); SetProp(list,L"ReaderLibraryList",(HANDLE)1); SyncFilters(); UpdateVisualMetrics();
+            SetBusy(false); Layout(); RefreshRows(); ThemeAttachWindow(window); ThemeAttachWindow(tooltips);
+        } return 0;
+    case WM_PAINT:
+        {
+            PAINTSTRUCT paint; HDC dc=BeginPaint(window,&paint); FillRect(dc,&paint.rcPaint,ThemeWindowBrush());
+            RECT searchBox={layout.left,layout.searchTop,layout.left+layout.searchWidth,layout.searchTop+Scale(32)};
+            HBRUSH surface=CreateSolidBrush(ThemeColors().surface); FillRect(dc,&searchBox,surface); DeleteObject(surface);
+            HBRUSH edge=CreateSolidBrush(GetFocus()==search?ThemeColors().accent:ThemeColors().border); FrameRect(dc,&searchBox,edge);
+            RECT glyph={searchBox.left+Scale(8),searchBox.top+Scale(8),searchBox.left+Scale(24),searchBox.top+Scale(24)};
+            DrawReaderIcon(dc,ReaderIcon::Search,glyph,ThemeColors().muted);
+            if(layout.sidebar) { RECT line={layout.sidebarWidth-1,Scale(16),layout.sidebarWidth,paint.rcPaint.bottom}; FillRect(dc,&line,edge); }
+            DeleteObject(edge); EndPaint(window,&paint);
         } return 0;
     case WM_SIZE: Layout(); return 0;
     case WM_GETMINMAXINFO:
@@ -465,9 +529,9 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             if (previous) DeleteObject(previous);
             RECT* bounds = (RECT*)lParam;
             SetWindowPos(window, NULL, bounds->left, bounds->top, bounds->right - bounds->left, bounds->bottom - bounds->top, SWP_NOZORDER | SWP_NOACTIVATE);
-            Layout();
+            UpdateVisualMetrics(); Layout();
         } return 0;
-    case WM_CLOSE: ShowWindow(window, SW_HIDE); return 0;
+    case WM_CLOSE: CloseLibraryView(); return 0;
     case WM_TIMER:
         if (wParam == import_timer) DrainImport();
         if (wParam == filter_timer) { KillTimer(window, filter_timer); RefreshRows(); }
@@ -475,6 +539,9 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
     case WM_COMMAND:
         {
             int command = LOWORD(wParam), notification = HIWORD(wParam);
+            if(command>=nav_all_id && command<=nav_missing_id)
+            { SendMessage(filter,CB_SETCURSEL,command-nav_all_id,0); SyncFilters(); RefreshRows(); return 0; }
+            if(command==filter_id && notification==CBN_SELCHANGE) SyncFilters();
             int id = SelectedId(); item_t* item = cache->get_by_id(id);
             std::vector<int> selected;
             if (command == remove_id || command == favorite_id || command == read_id) selected = SelectedIds();
@@ -549,6 +616,11 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                 case 2: { const wchar_t* extension = PathFindExtension(item->file_name); _tcsncpy(text, *extension ? extension + 1 : L"—", 511); CharUpperBuff(text, (DWORD)wcslen(text)); } break;
                 case 3:
                     if (item->read_state == 2) wcscpy(text, L"已读");
+                    else if (item->text_length && !_tcsicmp(PathFindExtension(item->file_name),L".pdf"))
+                    {
+                        if (!item->last_read && !item->index && !item->read_state) _stprintf(text,L"未读 · %d 页",item->text_length);
+                        else _stprintf(text,L"第 %d / %d 页",(std::min)(item->text_length,item->index+1),item->text_length);
+                    }
                     else if (item->text_length)
                     {
                         const wchar_t* ext = PathFindExtension(item->file_name);
@@ -586,6 +658,10 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
     case WM_DESTROY:
         if (job) SetEvent(job->cancel);
         job.reset(); library = list = search = filter = status = NULL;
+        if(rowSpacing) ImageList_Destroy(rowSpacing); rowSpacing=NULL;
+        if(headingFont) DeleteObject(headingFont); headingFont=NULL;
+        if(titleFont) DeleteObject(titleFont); titleFont=NULL;
+        if(tooltips) DestroyWindow(tooltips); tooltips=NULL;
         if (uiFont) DeleteObject(uiFont); uiFont = NULL;
         return 0;
     }
@@ -603,15 +679,23 @@ void OpenLibrary(HWND owner, Cache& data)
         WNDCLASS type = {}; type.lpfnWndProc = LibraryProc; type.hInstance = GetModuleHandle(NULL);
         type.lpszClassName = L"ReaderLocalLibrary"; type.hCursor = LoadCursor(NULL, IDC_ARROW); type.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         RegisterClass(&type);
-        library = CreateWindowEx(WS_EX_CONTROLPARENT, type.lpszClassName, L"本地书库", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-            CW_USEDEFAULT, CW_USEDEFAULT, Scale(880), Scale(560), owner, NULL, type.hInstance, NULL);
+        library = CreateWindowEx(WS_EX_CONTROLPARENT,type.lpszClassName,L"本地书库",WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
+            0,0,1,1,owner,NULL,type.hInstance,NULL);
     }
-    ShowWindow(library, SW_SHOWNORMAL); SetForegroundWindow(library);
-    RefreshRows(); CheckFiles(); SetFocus(search);
+    SendMessage(owner,WM_READER_LIBRARY_VIEW,TRUE,0);SetForegroundWindow(owner);
+    RefreshRows();CheckFiles();SetFocus(search);
 }
 
 void LibraryChanged() { if (library) SetTimer(library, filter_timer, 150, NULL); }
-void CloseLibrary() { if (library) DestroyWindow(library); }
+void CloseLibrary() { if(library) {HWND owner=GetParent(library);DestroyWindow(library);if(IsWindow(owner)) SendMessage(owner,WM_READER_LIBRARY_VIEW,FALSE,0);} }
+void CloseLibraryView() {if(library) SendMessage(GetParent(library),WM_READER_LIBRARY_VIEW,FALSE,0);}
+void LayoutLibraryView(HWND owner,const RECT* rect,UINT dpi,BOOL visible)
+{
+    if(!library || GetParent(library)!=owner) return;
+    if(dpi!=libraryDpi) SendMessage(library,0x02e0,MAKELONG(dpi,dpi),(LPARAM)rect);
+    else SetWindowPos(library,HWND_TOP,rect->left,rect->top,(std::max)(1,(int)(rect->right-rect->left)),(std::max)(1,(int)(rect->bottom-rect->top)),SWP_NOACTIVATE);
+    if((IsWindowVisible(library)!=FALSE)!=(visible!=FALSE)) ShowWindow(library,visible?SW_SHOWNA:SW_HIDE);
+}
 BOOL LibraryTranslateMessage(MSG* message)
 {
     if (!library || !IsWindowVisible(library) || (message->hwnd != library && !IsChild(library, message->hwnd))) return FALSE;
@@ -622,7 +706,7 @@ BOOL LibraryTranslateMessage(MSG* message)
         switch (command)
         {
         case library_key_cancel: CancelImport(); return TRUE;
-        case library_key_close: ShowWindow(library, SW_HIDE); return TRUE;
+        case library_key_close: CloseLibraryView(); return TRUE;
         case library_key_focus: SetFocus(search); return TRUE;
         case library_key_select_all:
             updatingSelection = true; ListView_SetItemState(list, -1, LVIS_SELECTED, LVIS_SELECTED);

@@ -18,3 +18,7 @@ int RemoveLibraryBooks(const std::vector<int>& ids);
 void SetLibraryBooksState(const std::vector<int>& ids, int favorite, int state);
 BOOL RelinkLibraryBook(int id, const TCHAR* path, const TCHAR* key);
 void SaveLibrary();
+
+const UINT WM_READER_LIBRARY_VIEW = WM_APP + 734;
+void CloseLibraryView();
+void LayoutLibraryView(HWND owner, const RECT* rect, UINT dpi, BOOL visible);

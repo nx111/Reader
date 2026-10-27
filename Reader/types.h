@@ -10,14 +10,10 @@
 #define ASSERT(x)
 #endif
 
-#define CACHE_SCHEMA_VERSION       4
+#define CACHE_SCHEMA_VERSION       5
 #define MAX_LIBRARY_ITEMS          100000
 
-#define IDM_LIBRARY                 46001
-#define IDM_NAV_BACK                46002
-#define IDM_NAV_FORWARD             46003
-#define IDM_READER_SEARCH           46004
-#define IDM_FOCUS                   46005
+#include "CommandIds.h"
 
 #define CACHE_FILE_NAME             _T(".cache.dat")
 #define ONLINE_FILE_SAVE_PATH       _T(".online\\")
@@ -98,6 +94,8 @@ typedef struct item_t
     int text_length; // zero means unknown (legacy/imported, not yet read)
     int read_state; // 0: unread, 1: reading, 2: read
     int favorite;
+    int pdf_zoom; // 0 fit width, -1 fit page, otherwise 25..400 percent
+    int pdf_scroll, pdf_x; // normalized viewport offsets, 0..1000000
     u64 last_read; // actual UTC Unix seconds; zero means unknown
 } item_t;
 

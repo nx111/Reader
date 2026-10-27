@@ -1,0 +1,39 @@
+{
+  "version": "chromium/8125",
+  "producer_commit": "4bdb7acd45b39ef6a7fc2a5b4c83f0398e45c9a6",
+  "producer": "https://github.com/bblanchon/pdfium-binaries",
+  "attestation_sha256": "a0964f520afc57593d285b081e23e401169cc42234f2d14f5bdb4a3add08c9b9",
+  "win-x64": {
+    "archive_sha256": "9a964261760cff52570aabf038ab346d3a5034dd8b30d0d5fe8861235d356b8b",
+    "archive_bytes": 3904987,
+    "library_sha256": "4b0dec92555d69437bef0df37be630181ab3e83a6823ca264ede355a4f2ef994",
+    "library_bytes": 7586816
+  },
+  "win-x86": {
+    "archive_sha256": "5aa1eb3e7de0589534245a181cb51def90d1dc76e987aea4be524a8cb3db1069",
+    "archive_bytes": 3763547,
+    "library_sha256": "e90b1e3b598ff9a2aa5395dab4e4fea4fa97f0f36de0bc99dda8be3b5a0e6ca8",
+    "library_bytes": 7011328
+  },
+  "linux-x64": {
+    "archive_sha256": "e1c3ce6e270cb5e0c20816b379ad9f2c1309972697c505f508de92bf5e7d6659",
+    "archive_bytes": 3828800,
+    "library_sha256": "1c251efce460d67437a4c76d4be9033ae2f17bf5603f5bff1af10209b94ca723",
+    "library_bytes": 8049768
+  },
+  "verification": {
+    "verified_utc": "2026-10-27T05:21:48.815245+00:00",
+    "tool": "GitHub CLI 2.103.3",
+    "signer_workflow": "bblanchon/pdfium-binaries/.github/workflows/build-all.yml",
+    "source_digest": "4bdb7acd45b39ef6a7fc2a5b4c83f0398e45c9a6",
+    "deny_self_hosted_runners": true,
+    "trusted_root_source": "https://raw.githubusercontent.com/sigstore/root-signing/main/targets/trusted_root.json",
+    "trusted_root_sha256": "3c2cc7f357dc064ec527fdcd78da6e9245c21a381e1abaa0f2b62b186bcac1a1",
+    "architectures": [
+      "win-x64",
+      "win-x86",
+      "linux-x64"
+    ]
+  },
+  "windows_target": "Windows 10/11; PE OS/subsystem version 10.0. Older systems unverified, app-local lazy load fails explicitly."
+}

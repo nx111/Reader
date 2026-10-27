@@ -81,7 +81,7 @@ static void Migration()
 static void Invalid()
 {
     const std::string examples[] = {
-        "{", "{}", R"({"schema_version":4,"header":{"item_count":0}})", R"({"schema_version":5,"header":{"item_count":0}})",
+        "{", "{}", R"({"schema_version":4,"header":{"item_count":0}})", R"({"schema_version":6,"header":{"item_count":0}})",
         R"({"schema_version":2.5,"header":{"item_count":0}})",
         R"({"header":{"item_count":1},"items":[]})",
         R"({"header":{"item_count":-1}})",
@@ -266,14 +266,14 @@ static void Geometry()
     for (int dpi : { 96, 120, 144, 192 })
     {
         auto narrow = ComputeReadingGeometry(300 * dpi / 96, 500 * dpi / 96, dpi, true, true);
-        assert(narrow.drawer && narrow.readingLeft == 0 && narrow.toolbarHeight == 56 * dpi / 96);
-        assert(narrow.sidebarWidth <= 300 * dpi / 96 && narrow.readingTop == narrow.toolbarHeight);
+        assert(narrow.drawer && narrow.readingLeft == 48 * dpi / 96 && narrow.readingTop == 0);
+        assert(narrow.sidebarWidth <= 300 * dpi / 96 && narrow.readingTop == 0);
         auto closed = ComputeReadingGeometry(1000 * dpi / 96, 600 * dpi / 96, dpi, true, false);
         auto wide = ComputeReadingGeometry(1000 * dpi / 96, 600 * dpi / 96, dpi, true, true);
-        assert(!wide.drawer && wide.readingLeft == (240 * dpi / 96 + 6 * dpi / 96));
+        assert(!wide.drawer && wide.readingLeft == (48 * dpi / 96 + 240 * dpi / 96 + 6 * dpi / 96));
         assert(wide.readingRight == closed.readingRight && wide.readingTop == closed.readingTop);
         auto focus = ComputeReadingGeometry(300 * dpi / 96, 500 * dpi / 96, dpi, false, false);
-        assert(focus.toolbarHeight == 0 && focus.sidebarWidth == 0 && focus.readingLeft == 0);
+        assert(focus.readingTop == 0 && focus.navigationWidth == 0 && focus.sidebarWidth == 0 && focus.readingLeft == 0);
         auto tiny = ComputeReadingGeometry(8, 8, dpi, true, true);
         assert(tiny.readingBottom >= tiny.readingTop && tiny.sidebarWidth <= 8);
     }
@@ -365,6 +365,52 @@ static void BookmarkInvalid()
     }
 }
 
+static void NotesAndPdfState()
+{
+    Reset(); Cache cache(L".cache.dat"); assert(cache.init());
+    int id=cache.new_item(L"C:\\书籍.pdf")->id;
+    item_t* item=cache.get_by_id(id);item->index=9;item->pdf_zoom=175;item->pdf_scroll=345678;item->pdf_x=12000;
+    bookmark_detail_t detail(-1,5);detail.note=L"读书备注：中文 ✨";
+    assert(cache.add_mark(item,5,&detail));assert(cache.set_mark_note(item,0,L"修订备注"));
+    assert(!cache.set_mark_note(item,0,std::wstring(501,L'x')));assert(!cache.set_mark_note(item,-1,L"invalid"));
+    assert(cache.save());std::string saved=Encoded(Bytes(primary));
+    Cache restored(L".cache.dat");assert(restored.init());item=restored.get_by_id(id);
+    assert(item->index==9&&item->pdf_zoom==175&&item->pdf_scroll==345678&&item->pdf_x==12000);
+    assert(restored.mark_detail(item,0).note==L"修订备注");
+    for (int kind=0;kind<4;++kind)
+    {
+        cJSON* root=cJSON_Parse(saved.c_str());cJSON* entry=cJSON_GetArrayItem(cJSON_GetObjectItem(root,"items"),0);
+        cJSON* mark=cJSON_GetArrayItem(cJSON_GetObjectItem(root,"bookmark_details"),0);
+        if(kind==0)cJSON_ReplaceItemInObject(mark,"note",cJSON_CreateString(std::string(501,'x').c_str()));
+        if(kind==1)cJSON_ReplaceItemInObject(mark,"note",cJSON_CreateNumber(5));
+        if(kind==2)cJSON_SetNumberValue(cJSON_GetObjectItem(entry,"pdf_scroll"),1000001);
+        if(kind==3)cJSON_SetNumberValue(cJSON_GetObjectItem(entry,"pdf_zoom"),24);
+        char* value=cJSON_PrintUnformatted(root);std::string broken=Encoded(value);free(value);cJSON_Delete(root);
+        Put(primary,broken);Cache invalid(L".cache.dat");assert(!invalid.init()&&Bytes(primary)==broken);
+    }
+    // A v4 cache has no PDF state or notes, and receives an immutable migration backup.
+    cJSON* root=cJSON_Parse(saved.c_str());cJSON_SetNumberValue(cJSON_GetObjectItem(root,"schema_version"),4);
+    cJSON* entry=cJSON_GetArrayItem(cJSON_GetObjectItem(root,"items"),0);
+    for(const char* field:{"pdf_zoom","pdf_scroll","pdf_x"})cJSON_DeleteItemFromObject(entry,field);
+    cJSON_DeleteItemFromObject(cJSON_GetArrayItem(cJSON_GetObjectItem(root,"bookmark_details"),0),"note");
+    char* value=cJSON_PrintUnformatted(root);std::string legacy=Encoded(value);free(value);cJSON_Delete(root);
+    Put(primary,legacy);Cache old(L".cache.dat");assert(old.init());item=old.get_by_id(id);
+    assert(item->pdf_zoom==0&&item->pdf_scroll==0&&old.mark_detail(item,0).note.empty());
+    assert(old.save()&&Bytes(L"C:\\Reader\\.cache.dat.v4.bak")==legacy);
+    // Duplicate-position notes are retained when relinking; oversized combinations fail safely.
+    int duplicate=old.new_item(L"C:\\new.pdf")->id;
+    assert(old.add_mark(old.get_by_id(duplicate),5,&detail));assert(old.set_mark_note(old.get_by_id(id),0,L"原书备注"));
+    assert(old.relink_item(id,L"C:\\new.pdf"));
+    assert(old.mark_detail(old.get_by_id(id),0).note.find(detail.note)!=std::wstring::npos);
+    int conflict=old.new_item(L"C:\\conflict.pdf")->id;
+    assert(old.add_mark(old.get_by_id(conflict),5,&detail));
+    assert(old.set_mark_note(old.get_by_id(id),0,std::wstring(300,L'a')));
+    assert(old.set_mark_note(old.get_by_id(conflict),0,std::wstring(300,L'b')));
+    assert(!old.relink_item(id,L"C:\\conflict.pdf")&&old.get_by_id(conflict));
+    assert(old.mark_detail(old.get_by_id(id),0).note==std::wstring(300,L'a'));
+
+}
+
 static void Batch()
 {
     Reset(); Cache cache(L".cache.dat"); assert(cache.init());
@@ -440,15 +486,15 @@ static void Splitter()
         for (int logical : {160, 240, 368, 640})
         {
             auto g = ComputeReadingGeometry(width, ReaderScale(600, dpi), dpi, true, true, logical);
-            assert(g.readingLeft == g.sidebarWidth + g.splitterWidth && g.splitterWidth == ReaderScale(6, dpi));
+            assert(g.readingLeft == g.navigationWidth + g.sidebarWidth + g.splitterWidth && g.splitterWidth == ReaderScale(6, dpi));
             assert(g.sidebarWidth >= ReaderScale(160, dpi) && g.readingRight - g.readingLeft >= ReaderScale(320, dpi));
             ReaderSplitterDrag drag;
             drag.Begin(logical, g.sidebarWidth, g.sidebarWidth, dpi);
             assert(drag.Active());
-            int next = drag.Move(g.sidebarWidth + ReaderScale(32, dpi), width);
+            int next = drag.Move(g.sidebarWidth + ReaderScale(32, dpi), width-g.navigationWidth);
             assert(next >= 160 && next <= 640);
-            assert(drag.Move(-100000, width) == 160);
-            assert(drag.Move(100000, width) == 640);
+            assert(drag.Move(-100000, width-g.navigationWidth) == 160);
+            assert(drag.Move(100000, width-g.navigationWidth) <= 640);
             assert(drag.Cancel() == logical && !drag.Active());
             assert(drag.Move(100000, width) == logical && !drag.Commit(logical));
             drag.Begin(logical, g.sidebarWidth, g.sidebarWidth, dpi); assert(!drag.Commit(logical));
@@ -457,7 +503,7 @@ static void Splitter()
         auto small = ComputeReadingGeometry(ReaderScale(700, dpi), ReaderScale(500, dpi), dpi, true, true, 640);
         assert(!small.drawer && small.readingRight - small.readingLeft >= ReaderScale(320, dpi));
         auto drawer = ComputeReadingGeometry(ReaderScale(699, dpi), ReaderScale(500, dpi), dpi, true, true, 640);
-        assert(drawer.drawer && !drawer.splitterWidth && drawer.readingLeft == 0);
+        assert(drawer.drawer && !drawer.splitterWidth && drawer.readingLeft == ReaderScale(48,dpi));
         auto focus = ComputeReadingGeometry(width, 600, dpi, false, false, 640);
         assert(!focus.sidebarWidth && !focus.splitterWidth && !focus.readingTop);
     }
@@ -487,7 +533,8 @@ static void Palette()
 }
 
 namespace Bridge {
-enum { book_text, book_online, book_web };
+static void ReaderNavigationState(BOOL, BOOL, BOOL, UINT = 0, BOOL = TRUE) {}
+enum { book_text, book_online, book_web, book_pdf };
 static int destroyed = 0, saves = 0;
 struct Chapter {
     int index, size; std::wstring title;
@@ -535,12 +582,21 @@ struct StubBook
         if (success) { chapter = request; *position = chapters[chapter].index; }
     }
 };
+struct PdfBook : StubBook
+{
+    void SaveView(item_t*) {} void RestoreView(const item_t*) {}
+    BOOL SearchSnapshot(std::wstring& value) {value=text;return TRUE;}
+    BOOL FindHit(int p,int n) {return p>=0&&n>0&&p<=(int)text.size()-n;}
+};
 static Cache _Cache(L".cache.dat");
 static header_t* _header = NULL;
 static item_t* _item = NULL;
 static StubBook* _Book = NULL;
 static int _activeBookId = -1;
 static HWND _readerButtons[8] = {};
+enum { IDM_VIEW=50001,IDM_MARK=50002 };
+static BOOL _libraryVisible=FALSE,_tocVisible=FALSE;static HWND _hTreeMark=NULL;
+static BOOL IsWindowVisible(HWND) {return FALSE;}
 static ReadingHistory _readingHistory, _replayHistory;
 static ReadingAnchor _jumpOrigin, _restoreAnchor;
 static BOOL _jumpPending = FALSE, _restorePending = FALSE, _replaying = FALSE;
@@ -673,6 +729,7 @@ int main(int argc, char** argv)
     else if (test == "import_bridge") Bridge::Import();
     else if (test == "navigation_bridge") Bridge::NavigationBridge();
     else if (test == "bookmark_metadata") BookmarkMetadata(); else if (test == "bookmark_invalid") BookmarkInvalid();
+    else if (test == "notes_pdf") NotesAndPdfState();
     else if (test == "batch") Batch(); else if (test == "search_bridge") Bridge::SearchBridge();
     else if (test == "batch_bridge") Bridge::BatchBridge();
     else if (test == "ui_persistence") UiPersistence(); else if (test == "ui_invalid") UiInvalid();

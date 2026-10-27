@@ -9,6 +9,7 @@
 #define MAX_BLANK_LINE      2
 
 static volatile LONG s_OpenSequence = 0;
+UINT Book::NextOpenToken() { return (UINT)InterlockedIncrement(&s_OpenSequence); }
 
 Book::Book()
     : m_Data(NULL)
@@ -37,7 +38,7 @@ BOOL Book::OpenBook(HWND hWnd)
     param = (ob_thread_param_t *)malloc(sizeof(ob_thread_param_t));
     param->_this = this;
     param->hWnd = hWnd;
-    param->token = m_OpenToken = (UINT)InterlockedIncrement(&s_OpenSequence);
+    param->token = m_OpenToken = NextOpenToken();
     m_hThread = (HANDLE)_beginthreadex(NULL, 0, OpenBookThread, param, 0, &threadID);
     return TRUE;
 }
@@ -54,7 +55,7 @@ BOOL Book::OpenBook(char *data, int size, HWND hWnd)
     param = (ob_thread_param_t *)malloc(sizeof(ob_thread_param_t));
     param->_this = this;
     param->hWnd = hWnd;
-    param->token = m_OpenToken = (UINT)InterlockedIncrement(&s_OpenSequence);
+    param->token = m_OpenToken = NextOpenToken();
     m_hThread = (HANDLE)_beginthreadex(NULL, 0, OpenBookThread, param, 0, &threadID);
     return TRUE;
 }

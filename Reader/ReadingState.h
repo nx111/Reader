@@ -30,11 +30,12 @@ struct ReadingAnchor
     int chapter;
     int offset;
     bool relative;
-    ReadingAnchor(int b = -1, int c = -1, int p = 0, bool r = false)
-        : book(b), chapter(c), offset(p), relative(r) {}
+    int viewport, horizontal;
+    ReadingAnchor(int b = -1, int c = -1, int p = 0, bool r = false, int v = -1, int h = -1)
+        : book(b), chapter(c), offset(p), relative(r), viewport(v), horizontal(h) {}
     bool operator==(const ReadingAnchor& a) const
     {
-        return book == a.book && offset == a.offset && relative == a.relative
+        return book == a.book && offset == a.offset && relative == a.relative && viewport == a.viewport && horizontal == a.horizontal
             && (!relative || chapter == a.chapter);
     }
 };
@@ -71,35 +72,34 @@ public:
     }
 };
 
+inline int ReaderScale(int logical,int dpi) { return (int)((long long)logical*dpi/96); }
+inline int ReaderNavigationWidth(int width,int dpi,bool visible,bool panel)
+{ return visible?(std::min)((std::max)(0,width),ReaderScale(panel || width<ReaderScale(700,dpi)?48:176,dpi)):0; }
+inline int ReaderSidebarWidth(int clientWidth,int dpi,int logical)
+{
+    int maximum=(std::max)(0,(std::min)(ReaderScale(640,dpi),clientWidth-ReaderScale(326,dpi)));
+    int minimum=(std::min)(ReaderScale(160,dpi),maximum);
+    return (std::max)(minimum,(std::min)(maximum,ReaderScale(logical,dpi)));
+}
 struct ReadingGeometry
 {
-    int toolbarHeight, columns, sidebarWidth, splitterWidth;
+    int navigationWidth,sidebarWidth,splitterWidth,sidebarHeadingHeight;
     bool drawer;
-    int readingLeft, readingTop, readingRight, readingBottom;
+    int readingLeft,readingTop,readingRight,readingBottom;
 };
-inline int ReaderScale(int logical, int dpi) { return (int)((long long)logical * dpi / 96); }
-inline int ReaderSidebarWidth(int clientWidth, int dpi, int logical)
+inline ReadingGeometry ComputeReadingGeometry(int width,int height,int dpi,bool chrome,bool panel,int sidebarLogical=240)
 {
-    int maximum = (std::max)(0, (std::min)(ReaderScale(640, dpi), clientWidth - ReaderScale(326, dpi)));
-    int minimum = (std::min)(ReaderScale(160, dpi), maximum);
-    return (std::max)(minimum, (std::min)(maximum, ReaderScale(logical, dpi)));
-}
-inline ReadingGeometry ComputeReadingGeometry(int width, int height, int dpi,
-    bool chrome, bool toc, int sidebarLogical = 240)
-{
-    width = (std::max)(0, width); height = (std::max)(0, height); dpi = (std::max)(96, dpi);
-    ReadingGeometry g = {};
-    g.columns = (std::max)(1, (std::min)(8, width / ReaderScale(56, dpi)));
-    g.toolbarHeight = chrome ? (std::min)(height, ((8 + g.columns - 1) / g.columns) * ReaderScale(28, dpi)) : 0;
-    g.drawer = width < ReaderScale(700, dpi);
-    if (toc)
+    width=(std::max)(0,width);height=(std::max)(0,height);dpi=(std::max)(96,dpi);
+    ReadingGeometry g={};g.navigationWidth=ReaderNavigationWidth(width,dpi,chrome,panel);
+    int available=width-g.navigationWidth;g.drawer=width<ReaderScale(700,dpi);
+    g.sidebarHeadingHeight=panel?(std::min)(height,ReaderScale(36,dpi)):0;
+    if(panel)
     {
-        if (g.drawer) g.sidebarWidth = (std::min)((std::max)(0, width - ReaderScale(40, dpi)), ReaderScale((std::max)(160, (std::min)(360, sidebarLogical)), dpi));
-        else { g.sidebarWidth = ReaderSidebarWidth(width, dpi, sidebarLogical); g.splitterWidth = ReaderScale(6, dpi); }
+        if(g.drawer) g.sidebarWidth=(std::min)((std::max)(0,available-ReaderScale(40,dpi)),ReaderScale((std::max)(160,(std::min)(360,sidebarLogical)),dpi));
+        else {g.sidebarWidth=ReaderSidebarWidth(available,dpi,sidebarLogical);g.splitterWidth=ReaderScale(6,dpi);}
     }
-    g.readingLeft = toc && !g.drawer ? g.sidebarWidth + g.splitterWidth : 0;
-    g.readingTop = g.toolbarHeight; g.readingRight = width; g.readingBottom = height;
-    return g;
+    g.readingLeft=g.navigationWidth+(panel&&!g.drawer?g.sidebarWidth+g.splitterWidth:0);
+    g.readingTop=0;g.readingRight=width;g.readingBottom=height;return g;
 }
 class ReaderSplitterDrag
 {

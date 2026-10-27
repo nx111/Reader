@@ -1,3 +1,6 @@
+#include <algorithm>
+#include "NavigationPane.h"
+#include "Theme.h"
 #include "Editctrl.h"
 #include "Keyset.h"
 #include "resource.h"
@@ -198,7 +201,15 @@ void EnableAllMenu(HWND hWnd, BOOL enable)
 {
     HMENU hMenu;
 
-    hMenu = GetMenu(hWnd);
+    hMenu = ReaderMenuHandle(hWnd);
     EnableMenu(hMenu, enable);
-    DrawMenuBar(hWnd);
+    ReaderNavigationMenuChanged();
+    ThemeUpdateMenu(hWnd);
+}
+
+void EC_UpdateReadingRect(const RECT* rect)
+{
+    if(!g_IsEditMode || !g_hEditCtrl) return;
+    SetWindowPos(g_hEditCtrl,NULL,rect->left,rect->top,(std::max)(1,(int)(rect->right-rect->left)),(std::max)(1,(int)(rect->bottom-rect->top)),SWP_NOACTIVATE|SWP_NOZORDER);
+    RECT client;GetClientRect(g_hEditCtrl,&client);SendMessage(g_hEditCtrl,EM_SETRECT,0,(LPARAM)&client);
 }

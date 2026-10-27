@@ -20,6 +20,9 @@
 #include "SearchDlg.h"
 #include "LibraryModel.h"
 #include "Theme.h"
+#include "NavigationPane.h"
+#include "BookmarkActions.h"
+#include "PdfBook.h"
 #include "GdiSurface.h"
 #include <time.h>
 #if ENABLE_TAG
@@ -74,18 +77,21 @@ static void FinishReadingJump();
 static void NavigateHistory(HWND, BOOL);
 static BOOL ReaderShortcut(MSG*);
 static void NavigateBookmark(HWND, int);
+static void BookmarkAction(HWND, UINT, int);
 void InvalidateReadingText();
 static unsigned long long _documentRevision = 1;
 static void RebindReadingCache();
 static LRESULT CALLBACK TocProc(HWND, UINT, WPARAM, LPARAM);
-static HWND _readerButtons[8] = {};
+static HWND _hTocHeading = NULL;
+static BOOL _navigationAccess = FALSE, _libraryVisible = FALSE;
 static HFONT _readerUIFont = NULL;
 static WNDPROC _tocProc = NULL;
-static BOOL _tocFromFocus = FALSE;
+static BOOL _panelFromFocus = FALSE;
 static BOOL _focusMode = FALSE, _tocVisible = FALSE, _syncingToc = FALSE, _routingWheel = FALSE;
 static RECT _readingRect = {};
 static ReadingGeometry _readingGeometry = {};
 static std::vector<HTREEITEM> _chapterItems;
+static std::vector<int> _fileMenuBookIds;
 static int _tocCurrent = -1, _activeBookId = -1;
 static ReadingHistory _readingHistory, _replayHistory;
 static ReadingAnchor _jumpOrigin, _restoreAnchor;
@@ -134,8 +140,14 @@ static LRESULT CALLBACK ReadingProc(HWND window, UINT message, WPARAM wParam, LP
         {
             PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint);
             OnPaint(owner, dc); EndPaint(window, &paint);
+            if(_Book && !_Book->IsLoading() && _Book->GetBookType()==book_pdf) ((PdfBook*)_Book)->UpdateScrollbars(window);
         } return 0;
     case WM_PRINTCLIENT: return OnPaint(owner, (HDC)wParam);
+    case WM_SIZE: InvalidateRect(window,NULL,FALSE); return 0;
+    case WM_VSCROLL: case WM_HSCROLL:
+        if (_Book && !_Book->IsLoading() && _Book->GetBookType()==book_pdf)
+        { ((PdfBook*)_Book)->ScrollBar(window,message==WM_VSCROLL?SB_VERT:SB_HORZ,wParam); Save(owner);return 0; }
+        break;
     case WM_MOUSEWHEEL:
     case WM_MOUSEHWHEEL:
     case WM_KEYDOWN:
@@ -187,7 +199,7 @@ static LRESULT CALLBACK SplitterProc(HWND window, UINT message, WPARAM wParam, L
         {
             POINT point; GetCursorPos(&point); ScreenToClient(owner, &point);
             RECT client; GetClientRect(owner, &client);
-            int width = _splitterDrag.Move(point.x, client.right);
+            int width = _splitterDrag.Move(point.x, client.right-_readingGeometry.navigationWidth);
             if (width != _sidebarPreviewWidth) { _sidebarPreviewWidth = width; UpdateReaderLayout(owner); Invalidate(owner, TRUE, FALSE); }
         }
         return 0;
@@ -208,7 +220,7 @@ static LRESULT CALLBACK SplitterProc(HWND window, UINT message, WPARAM wParam, L
             CancelSplitter(owner);
             int width = wParam == VK_HOME ? 240 : _header->sidebar_width + (wParam == VK_LEFT ? -8 : 8);
             RECT rc; GetClientRect(owner, &rc); int dpi = GetWindowDpiCompat(owner);
-            _header->sidebar_width = ReaderSidebarWidth(rc.right, dpi, width) * 96 / dpi;
+            _header->sidebar_width = ReaderSidebarWidth(rc.right-_readingGeometry.navigationWidth, dpi, width) * 96 / dpi;
             UpdateReaderLayout(owner); Invalidate(owner, TRUE, FALSE); Save(owner); return 0;
         }
         break;
@@ -254,6 +266,7 @@ static BOOL IsSupportedBookExtension(const TCHAR *ext)
         return FALSE;
 
     return _tcsicmp(ext, _T(".txt")) == 0
+        || _tcsicmp(ext, _T(".pdf")) == 0
         || _tcsicmp(ext, _T(".epub")) == 0
         || IsMobiBookExtension(ext)
 #ifdef ENABLE_NETWORK
@@ -344,7 +357,10 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
     // Main message loop:
     while (GetMessage(&msg, NULL, 0, 0))
     {
-        if (ReaderSearchTranslate(&msg) || LibraryTranslateMessage(&msg) || ReaderShortcut(&msg)) continue;
+        if ((msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) && !EC_IsEditMode()
+            && (msg.hwnd==_hWnd || msg.hwnd==_hReadingView || ReaderNavigationContains(msg.hwnd))
+            && KS_CustomKeyDownProc(_hWnd,msg.message,msg.wParam,msg.lParam)) continue;
+        if (ReaderSearchTranslate(&msg) || ReaderNavigationTranslate(&msg) || LibraryTranslateMessage(&msg) || ReaderShortcut(&msg)) continue;
         if (!_hFindDlg || !IsDialogMessage(_hFindDlg, &msg))
         {
             if (!TranslateAccelerator(_hWnd, hAccelTable, &msg))
@@ -553,13 +569,51 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     switch (message)
     {
+    case WM_SYSCOMMAND:
+        if (ReaderNavigationSystemMenu(wParam,lParam)) return 0;
+        return DefWindowProc(hWnd,message,wParam,lParam);
+    case WM_ACTIVATEAPP:
+        if (!wParam) CancelReaderNavigation();
+        return DefWindowProc(hWnd,message,wParam,lParam);
+    case WM_CANCELMODE:
+        CancelReaderNavigation(); CancelSplitter(hWnd); return 0;
+    case WM_READER_LIBRARY_VIEW:
+        _libraryVisible = wParam != 0;
+        if (_libraryVisible) PauseAutoPage(hWnd); else ResumeAutoPage(hWnd);
+        if (_libraryVisible) { _focusMode = FALSE; _tocVisible = FALSE; ShowWindow(_hTreeMark, SW_HIDE); _panelFromFocus = FALSE; }
+        UpdateReaderLayout(hWnd); UpdateTitle(hWnd); Invalidate(hWnd, TRUE, FALSE);
+        if (!_libraryVisible) SetFocus(hWnd);
+        return 0;
+    case WM_GETMINMAXINFO:
+        {
+            int dpi = GetWindowDpiCompat(hWnd); RECT minimum = {0,0,MulDiv(240,dpi,96),MulDiv(280,dpi,96)};
+            AdjustWindowRectEx(&minimum,(DWORD)GetWindowLongPtr(hWnd,GWL_STYLE),GetMenu(hWnd)!=NULL,(DWORD)GetWindowLongPtr(hWnd,GWL_EXSTYLE));
+            auto info = (MINMAXINFO*)lParam;
+            info->ptMinTrackSize.x = (std::max)(info->ptMinTrackSize.x,minimum.right-minimum.left);
+            info->ptMinTrackSize.y = (std::max)(info->ptMinTrackSize.y,minimum.bottom-minimum.top);
+        } return 0;
+    case WM_READER_NAVIGATION_ACCESS:
+        {
+            BOOL wasVisible = !_focusMode || _navigationAccess;
+            _navigationAccess = wParam != 0;
+            // Focusing an already visible menu changes only its hot/focus state.
+            if (wasVisible != (!_focusMode || _navigationAccess))
+            { UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE); }
+        } return 0;
+    case WM_READER_NATIVE_MENU_CLOSED:
+        ReaderNavigationMenuClosed();
+        if (_menuInvalid) { _menuInvalid = FALSE; OnUpdateMenu(hWnd); }
+        return 0;
+    case WM_ENTERMENULOOP: PauseAutoPage(hWnd); break;
+    case WM_EXITMENULOOP: ResumeAutoPage(hWnd); break;
     case WM_COMMAND:
         PauseAutoPage(hWnd);
         wmId    = LOWORD(wParam);
         wmEvent = HIWORD(wParam);
         if (wmId >= IDM_OPEN_BEGIN && wmId <= IDM_OPEN_END)
         {
-            item_t* item = _Cache.get_item(wmId - IDM_OPEN_BEGIN);
+            size_t row = (size_t)(wmId - IDM_OPEN_BEGIN);
+            item_t* item = row < _fileMenuBookIds.size() ? _Cache.get_by_id(_fileMenuBookIds[row]) : NULL;
             if (item) OnOpenItem(hWnd, item->id, FALSE);
             ResumeAutoPage(hWnd);
             break;
@@ -580,14 +634,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             break;
         case IDM_NAV_BACK:
         case IDM_NAV_FORWARD:
-            NavigateHistory(hWnd, wmId == IDM_NAV_FORWARD);
-            SetFocus(hWnd);
+            if (_libraryVisible) CloseLibraryView();
+            {
+                HWND focus = GetFocus();
+                NavigateHistory(hWnd, wmId == IDM_NAV_FORWARD);
+                SetFocus(ReaderNavigationContains(focus) ? focus : hWnd);
+            }
             break;
         case IDM_READER_SEARCH:
+            if (_libraryVisible) CloseLibraryView();
             OnSearch(hWnd, message, wParam, lParam);
             break;
         case IDM_FOCUS:
-            _focusMode = !_focusMode;
+            if (_libraryVisible) CloseLibraryView();
+            _focusMode = !_focusMode; _navigationAccess = FALSE;
             if (_focusMode) ShowWindow(_hTreeMark, SW_HIDE);
             UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE); SetFocus(hWnd);
             break;
@@ -632,20 +692,27 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         case IDM_VIEW:
             ToggleToc(hWnd);
             break;
-        case IDM_MARK:
-            if (IsWindowVisible(_hTreeMark)) ShowWindow(_hTreeMark, SW_HIDE);
-            else if (_Book && !_Book->IsLoading() && _item)
+        case IDM_PDF_FIT_WIDTH: case IDM_PDF_FIT_PAGE: case IDM_PDF_ZOOM_IN: case IDM_PDF_ZOOM_OUT:
+            if (_Book && _Book->GetBookType()==book_pdf && !_Book->IsLoading())
             {
-                if (_item->mark_size <= 0)
-                {
-                    MessageBox(hWnd, _T("当前没有书签。按 Ctrl+M 添加当前位置。"), _T("书签"), MB_OK | MB_ICONINFORMATION);
-                    break;
-                }
-                GetReadingRect(hWnd, &rc);
-                SetWindowPos(_hTreeMark, NULL, rc.left, rc.top, rc.right-rc.left, rc.bottom-rc.top, SWP_SHOWWINDOW);
-                SetFocus(_hTreeMark);
+                PdfBook* pdf=(PdfBook*)_Book;
+                if (wmId==IDM_PDF_FIT_WIDTH || wmId==IDM_PDF_FIT_PAGE) pdf->Fit(hWnd,wmId==IDM_PDF_FIT_PAGE);
+                else pdf->Zoom(hWnd,wmId==IDM_PDF_ZOOM_IN?1:-1);
+                Save(hWnd);
             }
-            UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE);
+            break;
+        case IDM_MARK_ADD: OnAddMark(hWnd,message,wParam,lParam); break;
+        case IDM_MARK_EXPORT: BookmarkAction(hWnd, IDM_MARK_EXPORT, -1); break;
+        case IDM_MARK:
+            if (IsWindowVisible(_hTreeMark)) { CloseToc(hWnd); break; }
+            if (_Book && !_Book->IsLoading() && _item)
+            {
+                if (_item->mark_size <= 0) { MessageBox(hWnd,_T("当前没有书签。按 Ctrl+M 添加当前位置。"),_T("书签"),MB_OK|MB_ICONINFORMATION); break; }
+                if (_libraryVisible) CloseLibraryView();
+                if (_focusMode) { _panelFromFocus = TRUE; _focusMode = FALSE; }
+                _tocVisible = FALSE; ShowWindow(_hTreeMark,SW_SHOWNA);
+                UpdateReaderLayout(hWnd); Invalidate(hWnd,TRUE,FALSE); SetFocus(_hTreeMark);
+            }
             break;
         default:
             ResumeAutoPage(hWnd);
@@ -704,7 +771,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                                 NavigateBookmark(hWnd, (int)item.lParam);
                         }
                         //ShowWindow(_hTreeMark, SW_HIDE);
-                        PostMessage(hWnd, WM_COMMAND, IDM_MARK, NULL);
+                        // Keep the bookmark panel open after activation.
                     }
                 }
             }
@@ -716,38 +783,29 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_CONTEXTMENU:
         if (wParam == (WPARAM)_hTreeMark)
         {
-            HTREEITEM Selected;
-            TVITEM item;
-            pt.x = LOWORD(lParam); 
-            pt.y = HIWORD(lParam);
-            Selected = TreeView_GetSelection(_hTreeMark);
-            if (Selected)
+            TVITEM selected = {}; selected.hItem = TreeView_GetSelection(_hTreeMark); selected.mask = TVIF_PARAM;
+            int index = selected.hItem && TreeView_GetItem(_hTreeMark, &selected) ? (int)selected.lParam : -1;
+            pt.x = GET_X_LPARAM(lParam); pt.y = GET_Y_LPARAM(lParam);
+            if (pt.x == -1 && pt.y == -1) { RECT r; GetWindowRect(_hTreeMark, &r); pt.x = r.left + 16; pt.y = r.top + 16; }
+            else
             {
-                HMENU hMenu = CreatePopupMenu();
-                if (hMenu)
-                {
-                    InsertMenu(hMenu, (UINT)-1, MF_BYPOSITION, IDM_MK_DEL, _T("Delete"));
-                    SetForegroundWindow(hWnd);
-                    int ret = TrackPopupMenu(hMenu, TPM_RETURNCMD, pt.x, pt.y, 0, _hTreeMark, NULL);
-                    DestroyMenu(hMenu);
-                    if (IDM_MK_DEL == ret)
-                    {
-                        item.mask = TVIF_PARAM;
-                        item.hItem = Selected;
-                        TreeView_GetItem(_hTreeMark, &item);
-
-                        if (_Cache.del_mark(_item, (int)item.lParam))
-                            OnUpdateBookMark(hWnd);
-                    }
-                }
+                TVHITTESTINFO hit = {}; hit.pt = pt; ScreenToClient(_hTreeMark, &hit.pt);
+                if (TreeView_HitTest(_hTreeMark, &hit)) { TreeView_SelectItem(_hTreeMark, hit.hItem); selected.hItem = hit.hItem; TreeView_GetItem(_hTreeMark, &selected); index = (int)selected.lParam; }
             }
+            HMENU popup = CreatePopupMenu();
+            AppendMenu(popup, MF_STRING | (index < 0 ? MF_GRAYED : 0), IDM_MARK_NOTE, L"编辑备注(&N)…");
+            AppendMenu(popup, MF_STRING, IDM_MARK_EXPORT, L"导出本书书签(&E)…");
+            AppendMenu(popup, MF_STRING | (index < 0 ? MF_GRAYED : 0), IDM_MK_DEL, L"删除书签(&D)");
+            UINT command = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
+            DestroyMenu(popup); BookmarkAction(hWnd, command, index);
         }
         break;
     case WM_MENURBUTTONUP:
         wmId = GetMenuItemID((HMENU)lParam, (int)wParam);
         if (wmId >= IDM_OPEN_BEGIN && wmId <= IDM_OPEN_END)
         {
-            item_t* item = _Cache.get_item(wmId - IDM_OPEN_BEGIN);
+            int row = wmId - IDM_OPEN_BEGIN;
+            item_t* item = row >= 0 && row < (int)_fileMenuBookIds.size() ? _Cache.get_by_id(_fileMenuBookIds[row]) : NULL;
             if (item && IDYES == MessageBoxFmt_(hWnd, IDS_WARN, MB_ICONINFORMATION | MB_YESNO, IDS_DELETE_FILE_CFM, item->file_name))
                 RemoveLibraryBook(item->id);
         }
@@ -931,7 +989,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         pt.x = GET_X_LPARAM(lParam); pt.y = GET_Y_LPARAM(lParam);
         if (!PtInRect(&_readingRect, pt)) break;
         SetFocus(hWnd);
-        if (_tocVisible && _readingGeometry.drawer)
+        if ((_tocVisible || IsWindowVisible(_hTreeMark)) && _readingGeometry.drawer)
         { CloseToc(hWnd); break; }
         if ((wParam & MK_LBUTTON) && (wParam & MK_RBUTTON) && _header->disable_lrhide == 0)
         {
@@ -969,7 +1027,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         pt.x = GET_X_LPARAM(lParam); pt.y = GET_Y_LPARAM(lParam);
         if (!PtInRect(&_readingRect, pt)) break;
         SetFocus(hWnd);
-        if (_tocVisible && _readingGeometry.drawer)
+        if ((_tocVisible || IsWindowVisible(_hTreeMark)) && _readingGeometry.drawer)
         { CloseToc(hWnd); break; }
         if ((wParam & MK_LBUTTON) && (wParam & MK_RBUTTON) && _header->disable_lrhide == 0)
         {
@@ -1005,32 +1063,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 break;
             }
         }
-        if (IsWindowVisible(_hTreeMark))
-        {
-            ShowWindow(_hTreeMark, SW_HIDE);
-            GetCursorPos(&pt);
-            GetMenuItemRect(hWnd, GetMenu(hWnd), 2, &rc);
-            if (PtInRect(&rc, pt))
-            {
-                break;
-            }
-        }
         return DefWindowProc(hWnd, message, wParam, lParam);
     case WM_NCRBUTTONDOWN:
         if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) && _header->disable_lrhide == 0) //not work
         {
             ShowHideWindow(hWnd);
             break;
-        }
-        if (IsWindowVisible(_hTreeMark))
-        {
-            ShowWindow(_hTreeMark, SW_HIDE);
-            GetCursorPos(&pt);
-            GetMenuItemRect(hWnd, GetMenu(hWnd), 2, &rc);
-            if (PtInRect(&rc, pt))
-            {
-                break;
-            }
         }
         return DefWindowProc(hWnd, message, wParam, lParam);
     case WM_MOUSEHWHEEL:
@@ -1040,6 +1078,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             const BYTE MAX_ALPHA = 0xff;
             const BYTE UNIT_STEP = 0x05;
             if (_routingWheel) return 0;
+            if (ReaderNavigationWheel(message,wParam,lParam)) return 0;
             POINT wheel = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             HWND trees[] = { _hTreeView, _hTreeMark };
             for (int i = 0; i < 2; ++i)
@@ -1054,7 +1093,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 }
             }
             ScreenToClient(hWnd, &wheel);
-            if (!PtInRect(&_readingRect, wheel)) return 0;
+            if (!PtInRect(&_readingRect, wheel) || _libraryVisible) return 0;
+            if (_Book && !_Book->IsLoading() && _Book->GetBookType()==book_pdf)
+            {
+                int delta=GET_WHEEL_DELTA_WPARAM(wParam);
+                if ((GetKeyState(VK_CONTROL)&0x8000) && message==WM_MOUSEWHEEL) ((PdfBook*)_Book)->Zoom(hWnd,delta>0?1:-1);
+                else if (message==WM_MOUSEHWHEEL || (GetKeyState(VK_SHIFT)&0x8000)) ((PdfBook*)_Book)->Scroll(hWnd,message==WM_MOUSEHWHEEL?delta:-delta,true);
+                else if(delta>0) _Book->LineUp(hWnd); else _Book->LineDown(hWnd);
+                Save(hWnd);return 0;
+            }
             if (message == WM_MOUSEHWHEEL) return 0;
             if (GET_WHEEL_DELTA_WPARAM(wParam) > 0)
             {
@@ -1184,6 +1231,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         DialogBox(hInst, MAKEINTRESOURCE(IDD_UPGRADE), hWnd, UpgradeProc);
         break;
 #endif
+    case WM_READER_PDF_FRAME:
+        if (_Book && _Book->GetBookType()==book_pdf && ReaderOpenResultIsCurrent(_Book->GetOpenToken(),(UINT)lParam))
+        { Invalidate(hWnd,TRUE,FALSE); }
+        break;
     case WM_OPEN_BOOK:
         if (ReaderOpenResultIsCurrent(_Book ? _Book->GetOpenToken() : 0, (UINT)lParam))
             OnOpenBookResult(hWnd, wParam == 1);
@@ -1267,23 +1318,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     case 0x02E0: //WM_DPICHANGED
         {
-            CancelSplitter(hWnd);
+            CancelReaderNavigation(); CancelSplitter(hWnd);
             NONCLIENTMETRICS theMetrics;
             theMetrics.cbSize = sizeof(NONCLIENTMETRICS);
             SystemParametersInfo(SPI_GETNONCLIENTMETRICS,sizeof(NONCLIENTMETRICS), (PVOID) &theMetrics,0);
-            HFONT hFont = CreateFontIndirect(&(theMetrics.lfMenuFont));
-            SendMessage(_hTreeView, WM_SETFONT, (WPARAM)hFont, NULL);
-            SendMessage(_hTreeView, TVM_SETITEMHEIGHT, theMetrics.iMenuHeight, NULL);
-            SendMessage(_hTreeMark, WM_SETFONT, (WPARAM)hFont, NULL);
-            SendMessage(_hTreeMark, TVM_SETITEMHEIGHT, theMetrics.iMenuHeight, NULL);
             DpiChanged(hWnd, &_header->font, &_header->placement.rcNormalPosition, wParam, (RECT*)lParam);
             DpiChanged(hWnd, &_header->font, &_header->fs_placement.rcNormalPosition, wParam, (RECT*)lParam);
             HFONT previousFont = _readerUIFont;
             theMetrics.lfMessageFont.lfHeight = -MulDiv(9, LOWORD(wParam), 72);
             theMetrics.lfMessageFont.lfWidth = 0;
             _readerUIFont = CreateFontIndirect(&theMetrics.lfMessageFont);
-            for (int i = 0; i < 8; ++i) SendMessage(_readerButtons[i], WM_SETFONT, (WPARAM)_readerUIFont, TRUE);
+            SendMessage(_hTocHeading, WM_SETFONT, (WPARAM)_readerUIFont, TRUE);
             if (previousFont) DeleteObject(previousFont);
+            SetTreeviewFont();
             UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE);
         }
         break;
@@ -2113,6 +2160,7 @@ static ReaderSearchToken CurrentSearchToken()
     token.revision = _documentRevision;
     if (!_Book || !_item || _Book->IsLoading()) return token;
     token.book = _item->id;
+    if (_Book->GetBookType()==book_pdf) token.chapter=_item->index;
     if (_Book->GetBookType() == book_online || _Book->GetBookType() == book_web) token.chapter = _Book->GetCurChapterIndex();
     return token;
 }
@@ -2126,6 +2174,7 @@ std::wstring ReaderSearchScope()
         TCHAR title[256] = {}; _Book->GetChapterTitle(title, 256);
         return std::wstring(L"范围：在线当前章 · ") + title;
     }
+    if (_Book->GetBookType()==book_pdf) return L"范围：PDF 当前页文本（不含扫描图片 OCR；每页至多 250000 字符）";
     return L"范围：本地书籍全文";
 }
 
@@ -2151,6 +2200,12 @@ static bool CurrentSearchRange(int& begin, int& end)
 
 BOOL CaptureReaderSearch(reader_search_source_t* source)
 {
+    if (source && _Book && _item && !_Book->IsLoading() && _Book->GetBookType()==book_pdf)
+    {
+        source->token=CurrentSearchToken();source->scope=ReaderSearchScope();source->base=0;source->chapters.clear();
+        source->chapters.push_back(ReaderTextChapter(0,L"第 "+std::to_wstring(_item->index+1)+L" 页"));
+        return ((PdfBook*)_Book)->SearchSnapshot(source->text);
+    }
     int begin = 0, end = 0;
     if (!source || !CurrentSearchRange(begin, end)) return FALSE;
     source->token = CurrentSearchToken(); source->scope = ReaderSearchScope(); source->base = begin;
@@ -2166,6 +2221,11 @@ BOOL CaptureReaderSearch(reader_search_source_t* source)
 
 BOOL ActivateReaderSearch(const ReaderSearchToken& token, int position, int length)
 {
+    if (_Book && _item && !_Book->IsLoading() && _Book->GetBookType()==book_pdf)
+    {
+        if (!(token==CurrentSearchToken()) || !BeginReadingJump()) return FALSE;
+        BOOL found=((PdfBook*)_Book)->FindHit(position,length);_Book->ReDraw(_hWnd);Save(_hWnd);return found;
+    }
     int begin = 0, end = 0;
     if (!(token == CurrentSearchToken()) || token.book < 0 || !CurrentSearchRange(begin, end)
         || position < begin || length <= 0 || position > end - length) return FALSE;
@@ -2186,6 +2246,7 @@ void InvalidateReadingText()
 
 static std::wstring BookmarkSummary(int position)
 {
+    if (_Book && _Book->GetBookType()==book_pdf) return L"第 " + std::to_wstring(position+1) + L" 页";
     if (!_Book || position < 0 || position >= _Book->GetTextLength()) return L"正文尚未加载";
     int length = (std::min)(150, _Book->GetTextLength() - position);
     if (position + length < _Book->GetTextLength() && length > 0
@@ -2197,6 +2258,7 @@ static bookmark_detail_t DescribeBookmark(int index)
 {
     bookmark_detail_t detail = _Cache.mark_detail(_item, index);
     if (!_Book || !_item) return detail;
+    if (_Book->GetBookType()==book_pdf) { detail.title=L"第 " + std::to_wstring(detail.position+1) + L" 页"; detail.summary=L"PDF 页书签";return detail; }
     chapters_t* chapters = _Book->GetChapters();
     int position = detail.position;
     int chapter = detail.chapter;
@@ -2223,6 +2285,28 @@ static bookmark_detail_t DescribeBookmark(int index)
     return detail;
 }
 
+static void BookmarkAction(HWND owner, UINT command, int index)
+{
+    if (!_item || !_Book || _Book->IsLoading()) return;
+    const int id = _item->id; const UINT token = _Book->GetOpenToken();
+    if (command == IDM_MARK_EXPORT)
+    {
+        std::vector<bookmark_detail_t> marks;
+        for (int i = 0; i < _item->mark_size; ++i) marks.push_back(DescribeBookmark(i));
+        ExportReaderBookmarks(owner, _item->title, marks); return;
+    }
+    if (index < 0 || index >= _item->mark_size) return;
+    if (command == IDM_MK_DEL) { if (_Cache.del_mark(_item,index)) { OnUpdateBookMark(owner); Save(owner); } return; }
+    if (command != IDM_MARK_NOTE) return;
+    bookmark_detail_t detail = _Cache.mark_detail(_item,index);
+    if (!EditReaderBookmarkNote(owner,detail.note)) return;
+    item_t* item = _Cache.get_by_id(id);
+    if (item && _Book && _Book->GetOpenToken() == token && index < item->mark_size
+        && _Cache.mark_detail(item,index).position == detail.position
+        && _Cache.mark_detail(item,index).chapter == detail.chapter && _Cache.set_mark_note(item,index,detail.note))
+    { OnUpdateBookMark(owner); Save(owner); }
+}
+
 static ReadingAnchor CurrentReadingAnchor()
 {
     if (!_item || !_Book) return ReadingAnchor();
@@ -2231,7 +2315,9 @@ static ReadingAnchor CurrentReadingAnchor()
     int offset = _item->index;
     if (relative && chapter >= 0 && chapter < (int)_Book->GetChapters()->size())
         offset -= (*_Book->GetChapters())[chapter].index;
-    return ReadingAnchor(_item->id, chapter, (std::max)(0, offset), relative);
+    ReadingAnchor anchor(_item->id, chapter, (std::max)(0, offset), relative);
+    if (_Book->GetBookType()==book_pdf) { ((PdfBook*)_Book)->SaveView(_item);anchor.viewport=_item->pdf_scroll;anchor.horizontal=_item->pdf_x; }
+    return anchor;
 }
 
 static BOOL BeginReadingJump()
@@ -2286,6 +2372,8 @@ static void PrepareReadingJump(HWND hWnd)
         position += (*_Book->GetChapters())[chapter].index;
     }
     _Book->SetReadingPosition(position);
+    if (_Book->GetBookType()==book_pdf && _restoreAnchor.viewport>=0)
+    { _item->pdf_scroll=_restoreAnchor.viewport;_item->pdf_x=(std::max)(0,_restoreAnchor.horizontal);((PdfBook*)_Book)->RestoreView(_item); }
     _restorePending = FALSE;
 }
 
@@ -2296,8 +2384,7 @@ static void FinishReadingJump()
     if (_replaying) _readingHistory = _replayHistory;
     else _readingHistory.Record(_jumpOrigin, current);
     _jumpPending = _replaying = FALSE;
-    EnableWindow(_readerButtons[5], _readingHistory.CanBack());
-    EnableWindow(_readerButtons[6], _readingHistory.CanForward());
+    ReaderNavigationState(_readingHistory.CanBack(), _readingHistory.CanForward(), EC_IsEditMode(), _libraryVisible?IDM_LIBRARY:_tocVisible?IDM_VIEW:IsWindowVisible(_hTreeMark)?IDM_MARK:0, _Book && !_Book->IsLoading());
 }
 
 static void NavigateBookmark(HWND hWnd, int index)
@@ -2325,32 +2412,32 @@ BOOL GetReadingRect(HWND hWnd, RECT* rect)
 static void UpdateReaderLayout(HWND hWnd)
 {
     if (!_header || !IsWindow(_hTreeView)) return;
-    RECT client; GetClientRectExceptStatusBar(hWnd, &client);
-    bool chrome = !_focusMode, toc = _tocVisible && !_focusMode;
-    UINT dpi = GetWindowDpiCompat(hWnd);
-    ReadingGeometry geometry = ComputeReadingGeometry(client.right, client.bottom, (int)dpi, chrome, toc, _splitterDrag.Active() ? _sidebarPreviewWidth : _header->sidebar_width);
-    RECT reading = { geometry.readingLeft, geometry.readingTop, geometry.readingRight, geometry.readingBottom };
-    bool changed = !EqualRect(&_readingRect, &reading) || _readingGeometry.sidebarWidth != geometry.sidebarWidth || _readingGeometry.splitterWidth != geometry.splitterWidth;
-    if (changed && _Book) _Book->ResetLayout();
-    _readingRect = reading; _readingGeometry = geometry;
-    int rowHeight = MulDiv(28, dpi, 96), buttonWidth = client.right / geometry.columns;
-    for (int i = 0; i < 8; ++i)
+    VisibleControl(_WndInfo.hStatusBar,_WndInfo.status==ds_normal && !_libraryVisible);
+    RECT client; GetClientRectExceptStatusBar(hWnd,&client);
+    bool chrome = !_focusMode || _navigationAccess;
+    bool marks = !_libraryVisible && IsWindowVisible(_hTreeMark), toc = !_libraryVisible && _tocVisible && !_focusMode;
+    bool panel = marks || toc; UINT dpi = GetWindowDpiCompat(hWnd);
+    ReadingGeometry geometry=ComputeReadingGeometry(client.right,client.bottom,dpi,chrome,panel,_splitterDrag.Active()?_sidebarPreviewWidth:_header->sidebar_width);
+    RECT reading={geometry.readingLeft,0,geometry.readingRight,geometry.readingBottom};
+    bool changed=!EqualRect(&_readingRect,&reading) || _readingGeometry.sidebarWidth!=geometry.sidebarWidth;
+    if(changed && _Book) _Book->ResetLayout(); _readingRect=reading;_readingGeometry=geometry;
+    LayoutReaderNavigation(client.right,client.bottom,chrome,panel);
+    int left=geometry.navigationWidth,heading=geometry.sidebarHeadingHeight;
+    if(panel)
     {
-        if (chrome) PositionControl(_readerButtons[i], NULL, i % geometry.columns * buttonWidth, i / geometry.columns * rowHeight, buttonWidth, rowHeight);
-        VisibleControl(_readerButtons[i], chrome);
+        SetWindowText(_hTocHeading,marks?_T("书 签"):_T("目 录"));
+        PositionControl(_hTocHeading,NULL,left+MulDiv(16,dpi,96),MulDiv(8,dpi,96),(std::max)(1,geometry.sidebarWidth-MulDiv(32,dpi,96)),(std::max)(1,heading-MulDiv(12,dpi,96)));
+        PositionControl(marks?_hTreeMark:_hTreeView,HWND_TOP,left,heading,geometry.sidebarWidth,(std::max)(1,(int)client.bottom-heading));
     }
-    if (toc) PositionControl(_hTreeView, HWND_TOP, 0, geometry.toolbarHeight, geometry.sidebarWidth, (std::max)(1, (int)client.bottom - geometry.toolbarHeight));
-    VisibleControl(_hTreeView, toc);
-    if (toc && !geometry.drawer) PositionControl(_hSplitter, HWND_TOP, geometry.sidebarWidth, geometry.toolbarHeight, geometry.splitterWidth, (std::max)(1, (int)client.bottom - geometry.toolbarHeight));
-    VisibleControl(_hSplitter, toc && !geometry.drawer);
-    if (IsWindowVisible(_hTreeMark)) PositionControl(_hTreeMark, HWND_TOP, reading.left, reading.top, (std::max)(1, (int)(reading.right - reading.left)), (std::max)(1, (int)(reading.bottom - reading.top)));
-    _WndInfo.bLayered = _WndInfo.status != ds_normal && !chrome && !toc && !IsWindowVisible(_hTreeMark);
-    if (!_WndInfo.bLayered) PositionControl(_hReadingView, HWND_BOTTOM, reading.left, reading.top, (std::max)(1, (int)(reading.right - reading.left)), (std::max)(1, (int)(reading.bottom - reading.top)));
-    VisibleControl(_hReadingView, !_WndInfo.bLayered);
-    for (int i = 0; i < 8; ++i) EnableWindow(_readerButtons[i], !EC_IsEditMode());
-    EnableWindow(_readerButtons[5], !EC_IsEditMode() && _readingHistory.CanBack());
-    EnableWindow(_readerButtons[6], !EC_IsEditMode() && _readingHistory.CanForward());
-    if (changed) { InvalidateRect(hWnd, NULL, FALSE); if (_hReadingView) InvalidateRect(_hReadingView, NULL, FALSE); }
+    VisibleControl(_hTocHeading,panel);VisibleControl(_hTreeView,toc);VisibleControl(_hTreeMark,marks);
+    if(panel && !geometry.drawer) PositionControl(_hSplitter,HWND_TOP,left+geometry.sidebarWidth,0,geometry.splitterWidth,(std::max)(1,(int)client.bottom));
+    VisibleControl(_hSplitter,panel && !geometry.drawer);
+    _WndInfo.bLayered=_WndInfo.status!=ds_normal && !chrome && !panel && !_libraryVisible && (!_Book || _Book->GetBookType()!=book_pdf);
+    if(!_WndInfo.bLayered) PositionControl(_hReadingView,HWND_BOTTOM,reading.left,0,(std::max)(1,(int)(reading.right-reading.left)),(std::max)(1,(int)reading.bottom));
+    VisibleControl(_hReadingView,!_WndInfo.bLayered && !_libraryVisible);
+    LayoutLibraryView(hWnd,&reading,dpi,_libraryVisible); EC_UpdateReadingRect(&reading);
+    ReaderNavigationState(_readingHistory.CanBack(),_readingHistory.CanForward(),EC_IsEditMode(),_libraryVisible?IDM_LIBRARY:toc?IDM_VIEW:marks?IDM_MARK:0, _Book && !_Book->IsLoading());
+    if(changed) {InvalidateRect(hWnd,NULL,FALSE);InvalidateRect(_hReadingView,NULL,FALSE);}
 }
 
 static void SyncCurrentChapter(BOOL reveal)
@@ -2368,9 +2455,9 @@ static void SyncCurrentChapter(BOOL reveal)
 static void CloseToc(HWND hWnd)
 {
     CancelSplitter(hWnd);
-    _tocVisible = FALSE;
-    if (_tocFromFocus) _focusMode = TRUE;
-    _tocFromFocus = FALSE;
+    _tocVisible = FALSE; ShowWindow(_hTreeMark,SW_HIDE);
+    if (_panelFromFocus) _focusMode = TRUE;
+    _panelFromFocus = FALSE;
     UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE); SetFocus(hWnd);
 }
 
@@ -2379,7 +2466,8 @@ static void ToggleToc(HWND hWnd)
     if (EC_IsEditMode()) return;
     if (_tocVisible && !_focusMode) { CloseToc(hWnd); return; }
     if (!_Book || _Book->IsLoading()) return;
-    if (_focusMode) { _tocFromFocus = TRUE; _focusMode = FALSE; }
+    if (_libraryVisible) CloseLibraryView();
+    if (_focusMode) { _panelFromFocus = TRUE; _focusMode = FALSE; }
     _tocVisible = TRUE;
     if (_tocVisible) ShowWindow(_hTreeMark, SW_HIDE);
     UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE);
@@ -2450,21 +2538,26 @@ static BOOL ReaderShortcut(MSG* message)
     if (EC_IsEditMode() || (message->message != WM_KEYDOWN && message->message != WM_SYSKEYDOWN)) return FALSE;
     bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    if (!control && !alt && _Book && !_Book->IsLoading() && _Book->GetBookType()==book_pdf
+        && (message->hwnd==_hWnd || message->hwnd==_hReadingView))
+    {
+        if (message->wParam==VK_PRIOR || message->wParam==VK_NEXT)
+        { if(message->wParam==VK_PRIOR) _Book->PageUp(_hWnd);else _Book->PageDown(_hWnd);Save(_hWnd);return TRUE; }
+    }
     int command = 0;
     if (control && message->wParam == 'L') command = IDM_LIBRARY;
     else if (control && message->wParam == 'T') command = IDM_VIEW;
     else if (alt && message->wParam == VK_LEFT) command = IDM_NAV_BACK;
     else if (alt && message->wParam == VK_RIGHT) command = IDM_NAV_FORWARD;
+    else if (alt && message->wParam == 'V') command = IDM_VIEW;
+    else if (alt && message->wParam == 'M') command = IDM_MARK;
     else if (message->wParam == VK_F8) command = IDM_FOCUS;
     else if (message->wParam == VK_ESCAPE && _splitterDrag.Active()) { CancelSplitter(_hWnd); return TRUE; }
     else if (message->wParam == VK_ESCAPE && (IsWindowVisible(_hTreeView) || IsWindowVisible(_hTreeMark)))
     {
-        if (IsWindowVisible(_hTreeMark)) ShowWindow(_hTreeMark, SW_HIDE);
-        else { CloseToc(_hWnd); return TRUE; }
-        UpdateReaderLayout(_hWnd); Invalidate(_hWnd, TRUE, FALSE); SetFocus(_hWnd);
-        return TRUE;
+        CloseToc(_hWnd); return TRUE;
     }
-    if (message->wParam == VK_TAB && !_focusMode)
+    if (message->wParam == VK_TAB && (!_focusMode || _navigationAccess))
     { HWND next = GetNextDlgTabItem(_hWnd, GetFocus(), (GetKeyState(VK_SHIFT) & 0x8000) != 0); if (next) SetFocus(next); return TRUE; }
     if (message->wParam == VK_F3) { AdvanceReaderSearch((GetKeyState(VK_SHIFT) & 0x8000) != 0); return TRUE; }
     if (!command) return FALSE;
@@ -2495,11 +2588,11 @@ LRESULT OnCreate(HWND hWnd)
     _hSplitter = CreateWindow(_T("STATIC"), _T("调整目录宽度（左右键调整，Home 复位）"), WS_CHILD | WS_TABSTOP | SS_NOTIFY, 0, 0, 1, 1, hWnd, (HMENU)46006, hInst, NULL);
     _splitterProc = (WNDPROC)SetWindowLongPtr(_hSplitter, GWLP_WNDPROC, (LONG_PTR)SplitterProc);
     // create chapters tree view
-    _hTreeView = CreateWindow(WC_TREEVIEW, _T("Tree View"), 
-        /*WS_VISIBLE | */WS_CHILD | WS_TABSTOP | WS_HSCROLL | WS_VSCROLL | TVS_HASLINES | TVS_INFOTIP | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
+    _hTreeView = CreateWindow(WC_TREEVIEW, _T("书内目录"),
+        /*WS_VISIBLE | */WS_CHILD | WS_TABSTOP | WS_HSCROLL | WS_VSCROLL | TVS_INFOTIP | TVS_SHOWSELALWAYS | TVS_FULLROWSELECT,
         0, 0, 200, 300, hWnd, NULL, hInst, NULL);
-    _hTreeMark = CreateWindow(WC_TREEVIEW, _T("Tree Mark"), 
-        /*WS_VISIBLE | */WS_CHILD | WS_TABSTOP | WS_HSCROLL | WS_VSCROLL | TVS_HASLINES | TVS_INFOTIP | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
+    _hTreeMark = CreateWindow(WC_TREEVIEW, _T("书签列表"),
+        /*WS_VISIBLE | */WS_CHILD | WS_TABSTOP | WS_HSCROLL | WS_VSCROLL | TVS_INFOTIP | TVS_SHOWSELALWAYS | TVS_FULLROWSELECT,
         0, 0, 200, 300, hWnd, NULL, hInst, NULL);
     //TreeView_SetBkColor(_hTreeView, GetSysColor(COLOR_MENU));
     //TreeView_SetBkColor(_hTreeMark, GetSysColor(COLOR_MENU));
@@ -2512,14 +2605,14 @@ LRESULT OnCreate(HWND hWnd)
     metrics.lfMessageFont.lfHeight = -MulDiv(9, GetWindowDpiCompat(hWnd), 72);
     metrics.lfMessageFont.lfWidth = 0;
     _readerUIFont = CreateFontIndirect(&metrics.lfMessageFont);
-    const TCHAR* labels[] = { _T("书库"), _T("目录"), _T("查找"), _T("书签"), _T("显示"), _T("返回"), _T("前进"), _T("专注") };
-    const int commands[] = { IDM_LIBRARY, IDM_VIEW, IDM_READER_SEARCH, IDM_MARK, IDM_DISPLAY, IDM_NAV_BACK, IDM_NAV_FORWARD, IDM_FOCUS };
-    for (int i = 0; i < 8; ++i)
-    {
-        _readerButtons[i] = CreateWindow(_T("BUTTON"), labels[i], WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-            0, 0, 0, 0, hWnd, (HMENU)(INT_PTR)commands[i], hInst, NULL);
-        SendMessage(_readerButtons[i], WM_SETFONT, (WPARAM)_readerUIFont, TRUE);
-    }
+    _hTocHeading = CreateWindow(_T("STATIC"), _T("目 录"), WS_CHILD | SS_LEFT, 0,0,1,1,hWnd,NULL,hInst,NULL);
+    SendMessage(_hTocHeading, WM_SETFONT, (WPARAM)_readerUIFont, FALSE);
+    SetProp(_hTreeView,L"ReaderReadingSidebar",(HANDLE)1); SetProp(_hTreeMark,L"ReaderReadingSidebar",(HANDLE)1);
+    SendMessage(_hTreeView,TVM_SETEXTENDEDSTYLE,TVS_EX_DOUBLEBUFFER,TVS_EX_DOUBLEBUFFER);
+    SendMessage(_hTreeMark,TVM_SETEXTENDEDSTYLE,TVS_EX_DOUBLEBUFFER,TVS_EX_DOUBLEBUFFER);
+    TreeView_SetIndent(_hTreeView,MulDiv(12,GetWindowDpiCompat(hWnd),96));
+    TreeView_SetIndent(_hTreeMark,MulDiv(12,GetWindowDpiCompat(hWnd),96));
+    CreateReaderNavigation(hWnd, _WndInfo.hMenu);
     UpdateReaderLayout(hWnd);
 
 
@@ -2552,6 +2645,7 @@ LRESULT OnCreate(HWND hWnd)
         }
     }
 
+    if (flag && !_header->item_count) PostMessage(hWnd,WM_COMMAND,IDM_LIBRARY,0);
     // check upgrade
 #ifdef ENABLE_NETWORK
     CheckUpgrade(hWnd);
@@ -2576,13 +2670,14 @@ LRESULT OnUpdateMenu(HWND hWnd)
 {
     if (GetWindowThreadProcessId(hWnd, NULL) != GetCurrentThreadId())
     { PostMessage(hWnd, WM_READER_UPDATE_MENU, 0, 0); return 0; }
+    if (ReaderNavigationTracking()) { _menuInvalid = TRUE; return 0; }
     ThemeReleaseMenus(hWnd);
     static Gdiplus::Bitmap* s_bitmap = NULL;
     static HGLOBAL s_hMemory = NULL;
     static HBITMAP hBitmap = NULL;
     TCHAR buf[MAX_LOADSTRING];
     int menu_begin_id = IDM_OPEN_BEGIN;
-    HMENU hMenuBar = GetMenu(hWnd);
+    HMENU hMenuBar = ReaderMenuHandle(hWnd);
     HMENU hFile = GetSubMenu(hMenuBar, 0);
     MENUITEMINFO mi = { 0 };
 
@@ -2610,14 +2705,15 @@ LRESULT OnUpdateMenu(HWND hWnd)
     {
         s_bitmap->GetHBITMAP(Gdiplus::Color(0, 0, 0, 0), &hBitmap);
     }
-    hFile = CreateMenu();
+    hFile = CreatePopupMenu();
     LoadString(hInst, IDS_MENU_OPEN, buf, MAX_LOADSTRING);
-    AppendMenu(hFile, MF_STRING, IDM_LIBRARY, _T("本地书库\tCtrl+L"));
+    AppendMenu(hFile, MF_STRING, IDM_LIBRARY, _T("本地书库(&L)\tCtrl+L"));
     AppendMenu(hFile, MF_STRING, IDM_OPEN, buf);
     AppendMenu(hFile, MF_SEPARATOR, 0, NULL);
+    _fileMenuBookIds.clear();
     for (int i=0; i<_header->item_count && i<40; i++)
     {
-        item_t* item = _Cache.get_item(i);
+        item_t* item = _Cache.get_item(i); _fileMenuBookIds.push_back(item->id);
         AppendMenu(hFile, MF_STRING, (UINT_PTR)menu_begin_id, item->file_name);
 #ifdef ENABLE_NETWORK
         if (0 == _tcsicmp(PathFindExtension(item->file_name), _T(".ol")) && item->is_new)
@@ -2636,6 +2732,12 @@ LRESULT OnUpdateMenu(HWND hWnd)
     AppendMenu(hFile, MF_STRING, IDM_EXIT, buf);
     LoadString(hInst, IDS_MENU_FILE, buf, MAX_LOADSTRING);
     InsertMenu(hMenuBar, 0, MF_BYPOSITION | MF_STRING | MF_POPUP, (UINT_PTR)hFile, buf);
+    ReaderNavigationMenuChanged();
+    for (UINT command : {IDM_MARK_ADD,IDM_MARK_EXPORT})
+        EnableMenuItem(hMenuBar,command,MF_BYCOMMAND|(_Book&&!_Book->IsLoading()?MF_ENABLED:MF_GRAYED));
+    for (UINT command : {IDM_PDF_FIT_WIDTH,IDM_PDF_FIT_PAGE,IDM_PDF_ZOOM_IN,IDM_PDF_ZOOM_OUT})
+        EnableMenuItem(hMenuBar,command,MF_BYCOMMAND|(_Book&&!_Book->IsLoading()&&_Book->GetBookType()==book_pdf?MF_ENABLED:MF_GRAYED));
+    ReaderNavigationState(_readingHistory.CanBack(), _readingHistory.CanForward(), EC_IsEditMode(), _libraryVisible?IDM_LIBRARY:_tocVisible?IDM_VIEW:IsWindowVisible(_hTreeMark)?IDM_MARK:0, _Book && !_Book->IsLoading());
     ThemeUpdateMenu(hWnd);
 
     return 0;
@@ -2857,6 +2959,7 @@ VOID Invalidate(HWND hWnd, BOOL bOnlyClient, BOOL bErase)
 
 LRESULT OnSize(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    CancelReaderNavigation();
     CancelSplitter(hWnd);
     SendMessage(_WndInfo.hStatusBar, message, wParam, lParam);
     UpdateReaderLayout(hWnd);
@@ -2948,13 +3051,13 @@ LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         GetWindowRect(_WndInfo.hStatusBar, &rcStatus);
         rcWin = rcContent;
         rcWin.bottom += rcStatus.bottom - rcStatus.top;
-        AdjustWindowRectEx(&rcWin, _header->style, TRUE, _header->exstyle);
+        AdjustWindowRectEx(&rcWin, _header->style, ReaderNavigationWindow() ? FALSE : TRUE, _header->exstyle);
 
         SetWindowLongPtr(hWnd, GWL_STYLE, _header->style | WS_CLIPCHILDREN);
         SetWindowLongPtr(hWnd, GWL_EXSTYLE, _header->exstyle);
         SendMessage(hWnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSm); // fixed bug
         ShowWindow(_WndInfo.hStatusBar, SW_SHOW);
-        SetMenu(hWnd, _WndInfo.hMenu);
+        if (!ReaderNavigationWindow()) SetMenu(hWnd, _WndInfo.hMenu);
         _WndInfo.bLayered = FALSE;
         _WndInfo.status = ds_normal;
         SetWindowPos(hWnd, NULL, rcWin.left, rcWin.top, rcWin.right-rcWin.left, rcWin.bottom-rcWin.top, windowPosFlags);
@@ -2969,7 +3072,7 @@ LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     _Book = pBook;
     
     SendMessage(hWnd, WM_SETREDRAW, TRUE, 0); // lock redraw
-    _focusMode = _WndInfo.status != ds_normal; _tocFromFocus = FALSE;
+    _focusMode = _WndInfo.status != ds_normal; _panelFromFocus = FALSE; _navigationAccess = FALSE;
     UpdateReaderLayout(hWnd);
     // repaint for alpha
     Invalidate(hWnd, FALSE, FALSE);
@@ -3017,7 +3120,7 @@ LRESULT OnFullScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if ((WS_CAPTION & _header->style) == WS_CAPTION)
         {
             ShowWindow(_WndInfo.hStatusBar, SW_SHOW);
-            SetMenu(hWnd, _WndInfo.hMenu);
+            if (!ReaderNavigationWindow()) SetMenu(hWnd, _WndInfo.hMenu);
             _WndInfo.bLayered = FALSE;
             _WndInfo.status = ds_normal;
         }
@@ -3036,7 +3139,7 @@ LRESULT OnFullScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     SendMessage(hWnd, WM_SETREDRAW, TRUE, 0); // lock redraw
-    _focusMode = _WndInfo.status != ds_normal; _tocFromFocus = FALSE;
+    _focusMode = _WndInfo.status != ds_normal; _panelFromFocus = FALSE; _navigationAccess = FALSE;
     UpdateReaderLayout(hWnd);
     // repaint for alpha
     Invalidate(hWnd, FALSE, FALSE);
@@ -3063,9 +3166,9 @@ LRESULT OnOpenFile(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     ofn.lStructSize = sizeof(ofn);  
     ofn.hwndOwner = hWnd;  
 #ifdef ENABLE_NETWORK
-    ofn.lpstrFilter = _T("Files (*.txt;*.epub;*.mobi;*.azw3;*.azw;*.prc;*.pdb;*.ol;*.web)\0*.txt;*.epub;*.mobi;*.azw3;*.azw;*.prc;*.pdb;*.ol;*.web\0\0");
+    ofn.lpstrFilter = _T("Files (*.txt;*.epub;*.pdf;*.mobi;*.azw3;*.azw;*.prc;*.pdb;*.ol;*.web)\0*.txt;*.epub;*.pdf;*.mobi;*.azw3;*.azw;*.prc;*.pdb;*.ol;*.web\0\0");
 #else
-    ofn.lpstrFilter = _T("Files (*.txt;*.epub;*.mobi;*.azw3;*.azw;*.prc;*.pdb)\0*.txt;*.epub;*.mobi;*.azw3;*.azw;*.prc;*.pdb\0\0");
+    ofn.lpstrFilter = _T("Files (*.txt;*.epub;*.pdf;*.mobi;*.azw3;*.azw;*.prc;*.pdb)\0*.txt;*.epub;*.pdf;*.mobi;*.azw3;*.azw;*.prc;*.pdb\0\0");
 #endif
     ofn.lpstrInitialDir = NULL;
     ofn.lpstrFile = szFileName; 
@@ -3114,6 +3217,7 @@ LRESULT OnAddMark(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 LRESULT OnAutoPage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (_libraryVisible) CloseLibraryView();
     if (_Book && !_Book->IsLoading())
     {
         if (_IsAutoPage)
@@ -3161,6 +3265,7 @@ LRESULT OnEditMode(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     TCHAR *text = NULL;
     BOOL readonly = TRUE;
 
+    if (_Book && _Book->GetBookType()==book_pdf) {MessageBox(hWnd,L"PDF 为固定页面，不提供文本编辑。",L"PDF",MB_OK|MB_ICONINFORMATION);return 0;}
     if (EC_IsEditMode())
     {
         EC_LeaveEditMode();
@@ -3257,6 +3362,7 @@ LRESULT OnChapterDown(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 LRESULT OnFontZoomIn(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (_Book && !_Book->IsLoading() && _Book->GetBookType()==book_pdf) {((PdfBook*)_Book)->Zoom(hWnd,1); Save(hWnd);return 0;}
     //const int ZOOM_MIN = 1;
     const int ZOOM_MAX = 72;
     int PointSize;
@@ -3277,6 +3383,7 @@ LRESULT OnFontZoomIn(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 LRESULT OnFontZoomOut(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (_Book && !_Book->IsLoading() && _Book->GetBookType()==book_pdf) {((PdfBook*)_Book)->Zoom(hWnd,-1); Save(hWnd);return 0;}
     const int ZOOM_MIN = 1;
     //const int ZOOM_MAX = 72;
     int PointSize;
@@ -3391,7 +3498,7 @@ LRESULT OnUpdateBookMark(HWND hWnd)
         for (int i = 0; i < _item->mark_size; ++i)
         {
             bookmark_detail_t detail = DescribeBookmark(i);
-            labels.push_back(detail.title + L" · " + detail.summary);
+            labels.push_back(detail.title + L" · " + detail.summary + (detail.note.empty() ? L"" : L" · 备注: " + detail.note));
         }
     if (token == _markBookToken && labels == _markLabels) return 0;
     _markBookToken = token; _markLabels = labels;
@@ -3461,6 +3568,14 @@ LRESULT OnOpenBookResult(HWND hWnd, BOOL result)
     // set param
     _header = _Cache.get_header();
     _Book->Init(&_item->index, _header);
+    if (_Book->GetBookType()==book_pdf)
+    {
+        ((PdfBook*)_Book)->RestoreView(_item);
+        std::wstring title=((PdfBook*)_Book)->Title(),author=((PdfBook*)_Book)->Author();
+        if(!title.empty()) lstrcpyn(_item->title,title.c_str(),256);
+        if(!author.empty()) lstrcpyn(_item->author,author.c_str(),256);
+    }
+    else { ShowScrollBar(_hReadingView,SB_BOTH,FALSE); }
     _Book->SetChapterRule(&(_header->chapter_rule));
 
 #ifdef ENABLE_NETWORK
@@ -3692,6 +3807,7 @@ void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
         return;
     }
 
+    if (_libraryVisible) CloseLibraryView();
     // check md5, is already exist
     item = _Cache.find_item(szFileName);
     if (item)
@@ -3724,6 +3840,10 @@ void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
         _Book->SetFileName(szFileName);
         _Book->SetChapterRule(&(_header->chapter_rule));
         _Book->OpenBook(NULL, size, hWnd);
+    }
+    else if (_tcsicmp(ext, _T(".pdf")) == 0)
+    {
+        _Book = new PdfBook; _Book->SetFileName(szFileName); _Book->OpenBook(hWnd);
     }
     else if (_tcsicmp(ext, _T(".epub")) == 0)
     {
@@ -3761,6 +3881,7 @@ void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
     }
 #endif
 
+    UpdateReaderLayout(hWnd);
     //EnableWindow(hWnd, FALSE);
     PlayLoadingImage(hWnd);
 }
@@ -3938,6 +4059,7 @@ static void _free_resource(HWND hWnd)
     }
     _readingSurface.Reset(); _frameSurface.Reset();
     ThemeShutdown();
+    DestroyReaderNavigation();
     // reset
     ShowSysTray(hWnd, FALSE);
     StopAutoPage(hWnd);
@@ -4013,6 +4135,7 @@ static void _update_data(HWND hWnd, BOOL keep_header, BOOL do_save)
 
 void Save(HWND hWnd)
 {
+    if (_Book && _item && !_Book->IsLoading() && _Book->GetBookType()==book_pdf) ((PdfBook*)_Book)->SaveView(_item);
 #if ENABLE_REALTIME_SAVE
     PostMessage(hWnd, WM_SAVE_CACHE, 0, NULL);
 #endif
@@ -4057,15 +4180,16 @@ void UpdateProgess(void)
     {
         _item->text_length = _Book->GetTextLength();
         static ReaderProgressObservation observed;
-        if (observed.MarkRead(_Book->GetOpenToken(), _item->index,
-            _Book->GetBookType() != book_online && _Book->GetBookType() != book_web, _Book->IsLastPage()))
+        if ((_Book->GetBookType()!=book_pdf || ((PdfBook*)_Book)->FrameReady()) && observed.MarkRead(_Book->GetOpenToken(), _item->index + (_Book->GetBookType()==book_pdf?1:0),
+            _Book->GetBookType() != book_online && _Book->GetBookType() != book_web, _Book->IsLastPage() && (_Book->GetBookType()!=book_pdf || ((PdfBook*)_Book)->FrameReady())))
             _item->read_state = 2;
         dprog = (double)_Book->GetProgress();
         nprog = (int)(dprog * 100);
         dprog = (double)nprog / 100.0;
         if (!_IsAutoPage)
         {
-            _stprintf(progress, _T("  %.2f%%  ( %d / %d )"), dprog, _item->index + _Book->GetPageLength(), _Book->GetTextLength());
+            if (_Book->GetBookType()==book_pdf) _stprintf(progress, L"  PDF 第 %d / %d 页  (%.2f%%)", _item->index+1, _Book->GetTextLength(), dprog);
+            else _stprintf(progress, _T("  %.2f%%  ( %d / %d )"), dprog, _item->index + _Book->GetPageLength(), _Book->GetTextLength());
         }
         else
         {
@@ -4087,7 +4211,11 @@ void UpdateTitle(HWND hWnd)
     TCHAR szFileName[MAX_PATH] = { 0 };
     TCHAR szChapter[MAX_PATH] = { 0 };
 
-    if (_Book)
+    if (_libraryVisible)
+    {
+        _stprintf(szNewTitle,_T("%s - 本地书库"),szTitle);
+    }
+    else if (_Book)
     {
         memcpy(szFileName, _Book->GetFileName(), _tcslen(_Book->GetFileName()+1) * sizeof(TCHAR));
         PathRemoveExtension(szFileName);
@@ -4151,7 +4279,7 @@ void RemoveMenus(HWND hWnd, BOOL redraw)
 {
     HMENU hMenu;
 
-    hMenu = GetMenu(hWnd);
+    hMenu = ReaderMenuHandle(hWnd);
 
 #ifndef ENABLE_NETWORK
     RemoveMenuById(hMenu, FALSE, IDM_WEB);      // 必须在 IDM_ONLINE 之前（TRUE 会连带删除后面一项）
@@ -4163,8 +4291,7 @@ void RemoveMenus(HWND hWnd, BOOL redraw)
     RemoveMenuById(hMenu, FALSE, IDM_TAGSET);
 #endif
 
-    if (redraw)
-        DrawMenuBar(hWnd);
+    if (redraw) { ReaderNavigationMenuChanged(); ThemeUpdateMenu(hWnd); }
 }
 
 BOOL GetClientRectExceptStatusBar(HWND hWnd, RECT* rc)
@@ -4783,7 +4910,7 @@ void SetTreeviewFont()
     if (_header->meun_font_follow)
     {
         s_hFont = CreateFontIndirect(&_header->font);
-        int height = abs((int)(_header->font.lfHeight * 1.5f));
+        int height = (std::max)(MulDiv(32,GetWindowDpiCompat(_hWnd),96), abs((int)(_header->font.lfHeight * 1.5f)));
         SendMessage(_hTreeView, WM_SETFONT, (WPARAM)s_hFont, NULL);
         SendMessage(_hTreeView, TVM_SETITEMHEIGHT, height, NULL);
         SendMessage(_hTreeMark, WM_SETFONT, (WPARAM)s_hFont, NULL);
@@ -4796,7 +4923,7 @@ void SetTreeviewFont()
         if (Is_WinXP_SP2_or_Later())
             theMetrics.cbSize = sizeof(NONCLIENTMETRICS) - sizeof(theMetrics.iPaddedBorderWidth);
         SystemParametersInfo(SPI_GETNONCLIENTMETRICS,sizeof(NONCLIENTMETRICS), (PVOID) &theMetrics,0);
-        theMetrics.iMenuHeight = abs((int)(theMetrics.iMenuHeight * 1.25f)); // 1.25 line height
+        theMetrics.iMenuHeight = (std::max)(MulDiv(32,GetWindowDpiCompat(_hWnd),96), abs((int)(theMetrics.iMenuHeight * 1.25f)));
         if (theMetrics.iMenuHeight == 0)
         {
             theMetrics.iMenuHeight = 20;

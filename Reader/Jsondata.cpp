@@ -1106,6 +1106,12 @@ static bool ReadLibraryItem(cJSON* parent, item_t* data, int schema, int row)
         if (value && !JsonInteger(value, 0, 9007199254740991.0)) return false;
         data->last_read = value ? (u64)value->valuedouble : 0;
     }
+    cJSON* zoom = cJSON_GetObjectItem(parent, "pdf_zoom");
+    cJSON* scroll = cJSON_GetObjectItem(parent, "pdf_scroll");
+    cJSON* horizontal = cJSON_GetObjectItem(parent, "pdf_x");
+    if (zoom && (!JsonInteger(zoom, -1, 400) || (zoom->valueint > 0 && zoom->valueint < 25))) return false;
+    if ((scroll && !JsonInteger(scroll, 0, 1000000)) || (horizontal && !JsonInteger(horizontal, 0, 1000000))) return false;
+    data->pdf_zoom = zoom ? zoom->valueint : 0; data->pdf_scroll = scroll ? scroll->valueint : 0; data->pdf_x = horizontal ? horizontal->valueint : 0;
     // Legacy order is evidence of order only, never of a reading timestamp.
     if (!data->title[0])
     {
@@ -1132,6 +1138,9 @@ static void WriteLibraryItem(cJSON* parent, const item_t* data)
     cJSON_AddNumberToObject(parent, "read_state", data->read_state);
     cJSON_AddNumberToObject(parent, "favorite", data->favorite);
     cJSON_AddNumberToObject(parent, "last_read", (double)data->last_read);
+    cJSON_AddNumberToObject(parent, "pdf_zoom", data->pdf_zoom);
+    cJSON_AddNumberToObject(parent, "pdf_scroll", data->pdf_scroll);
+    cJSON_AddNumberToObject(parent, "pdf_x", data->pdf_x);
     cJSON* marks = cJSON_AddArrayToObject(parent, "mark");
     for (int i = 0; i < data->mark_size; ++i) cJSON_AddItemToArray(marks, cJSON_CreateNumber(data->mark[i]));
 }
@@ -1167,6 +1176,14 @@ static bool ReadBookmarkDetails(cJSON* root, const item_t* items, int count, boo
         value = Utf8ToUtf16(summary->valuestring);
         if (!value || wcslen(value) > 199) return false;
         detail.summary = value;
+        cJSON* note = cJSON_GetObjectItem(record, "note");
+        if (note)
+        {
+            if (!cJSON_IsString(note)) return false;
+            value = Utf8ToUtf16(note->valuestring);
+            if (!value || wcslen(value) > 500) return false;
+            detail.note = value;
+        }
         std::vector<bookmark_detail_t>& records = output[book->valueint];
         if (records.empty())
             for (int j = 0; j < found->second->mark_size; ++j) records.push_back(bookmark_detail_t(-1, found->second->mark[j]));
@@ -1189,7 +1206,7 @@ static void WriteBookmarkDetails(cJSON* root, header_t* data, const bookmark_sto
         for (int i = 0; i < (int)book->second.size() && i < found->second->mark_size; ++i)
         {
             const bookmark_detail_t& detail = book->second[i];
-            if (detail.position != found->second->mark[i] || (detail.chapter < 0 && detail.title.empty() && detail.summary.empty())) continue;
+            if (detail.position != found->second->mark[i] || (detail.chapter < 0 && detail.title.empty() && detail.summary.empty() && detail.note.empty())) continue;
             cJSON* record = cJSON_CreateObject();
             cJSON_AddNumberToObject(record, "book_id", book->first);
             cJSON_AddNumberToObject(record, "mark_index", i);
@@ -1197,6 +1214,7 @@ static void WriteBookmarkDetails(cJSON* root, header_t* data, const bookmark_sto
             cJSON_AddNumberToObject(record, "position", detail.position);
             cJSON_AddStringToObject(record, "title", Utf16ToUtf8(detail.title.c_str()));
             cJSON_AddStringToObject(record, "summary", Utf16ToUtf8(detail.summary.c_str()));
+            if (!detail.note.empty()) cJSON_AddStringToObject(record, "note", Utf16ToUtf8(detail.note.c_str()));
             cJSON_AddItemToArray(array, record);
         }
     }

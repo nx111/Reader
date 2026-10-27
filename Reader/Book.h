@@ -24,7 +24,8 @@ typedef enum book_type_t
     book_epub,
     book_mobi,
     book_online,
-    book_web
+    book_web,
+    book_pdf
 } book_type_t;
 
 class Book;
@@ -81,7 +82,7 @@ public:
     virtual BOOL UpdateChapters(int offset) = 0;
     // Zero keeps the generic open-file error for existing book types.
     virtual UINT GetOpenErrorMessage(void) { return 0; }
-    BOOL OpenBook(HWND hWnd);
+    virtual BOOL OpenBook(HWND hWnd);
     BOOL OpenBook(char *data, int size, HWND hWnd);
     BOOL CloseBook(void);
     virtual BOOL IsLoading(void);
@@ -111,6 +112,7 @@ protected:
     
     BOOL GetLine(wchar_t* text, int len, int *line_len, int *lf_len, int *is_blank_line, int *prefix_blank_len, int *suffix_blank_len);
     void ForceKill(void);
+    static UINT NextOpenToken();
 
 protected:
     static unsigned __stdcall OpenBookThread(void* pArguments);

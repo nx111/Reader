@@ -140,7 +140,43 @@ checks v3-to-v4 backup/persistence, malformed UI settings, 96/120/144/168/192 DP
 splitter boundaries and light/dark palette contrast/custom reading semantics.
 `READER_LIBRARY_TEST_FLAGS` also enables sanitizers for these checks.
 
-The full current portable suite is 57 tests: 20 existing format/parser tests,
+The previous sidebar/theme portable suite was 57 tests: 20 existing format/parser tests,
 21 cache/library/production-bridge tests, 7 search/text tests and 9 UI/rendering
 tests. See [the current local verification record](../doc/sidebar-theme-render.md)
 for the Windows runtime limits and manual checklist.
+
+
+## Final left navigation, bookmark notes/export and PDF
+
+```sh
+python -m unittest discover -s tests -p 'test_navigation_ui.py' -v
+READER_PDFIUM_LIBRARY=/path/to/verified/libpdfium.so \
+  LIBMOBI_SOURCE=/path/to/libmobi python -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+The final suite is **81 tests**, replacing the abandoned top-menu layout checks:
+20 format/parser, 22 cache/library/production bridges, 7 search/text, 9 existing
+render/UI, 15 left navigation/layout/icon/export/PDF semantics, and 8 real PDFium
+engine checks. No tests download a PDF library. `test_pdf_engine.py` checks the
+exact dependency-lock DLL/shared-library checksum before executing the renderer;
+without a supplied verified library those 8 tests are explicitly skipped. The
+optional password fixture uses already installed `pypdf`; it is not an application
+dependency. Other PDF fixtures are generated directly from small PDF objects.
+
+The production engine is executed on Linux for real text and scan-page pixels,
+metadata/outlines, searchable text/rectangles, malformed/password files, cancellation,
+allocation bounds and repeat/parallel open-render-close. The UI cases cover final
+left navigation, icon rail/drawer, one docked library navigation, wrapped actions,
+Alt/F10/AltGr/Shift+F10/keyboard routes, same-page PDF navigation anchors, fit/zoom/
+resize at 100–200% mathematical DPI, bookmark note migration/invalid values/relink,
+and local Markdown/TXT output. Source contracts check native controls/popups,
+focus/cancel, stale PDF results, thread cleanup and body-only drawing isolation.
+They do not execute a Windows event loop or assert actual GUI accessibility/pixels.
+
+The full 81 pass with ASan/UBSan in the local implementation environment (LSan off).
+The precompiled PDFium library itself is not sanitizer-instrumented. The optional
+MinGW script covers 24 translation units in network and offline configurations;
+resource compilation uses a lossless temporary UTF-16 conversion and SDK case
+aliases. No MSVC linkage, native PowerShell or new Windows CI build was run here.
+Final package size and real Windows/DPI/transparent/flicker behavior remain untested.
+See [implementation, dependency provenance and manual checklist](../doc/left-navigation-pdf.md).

@@ -24,4 +24,5 @@ dump.html
 
 # 本地测试脚手架
 /_probe/
+/.deps/
 /test_https.obj

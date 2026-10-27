@@ -323,6 +323,22 @@ DWORD ToHotkey(WPARAM wParam)
     return MAKEWORD(lw, hw);
 }
 
+// User assignments take precedence over the extra navigation entry shortcuts.
+// Defaults retain the previously published navigation mapping; controls used
+// for text entry keep their own editing shortcuts.
+BOOL KS_CustomKeyDownProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    DWORD value=ToHotkey(wParam);
+    for (int i=KI_HIDE;i<KI_MAXCOUNT;++i)
+        if (LOWORD(g_Keysets[i].key)==KT_SHORTCUTKEY && value==*g_Keysets[i].pvalue
+            && *g_Keysets[i].pvalue!=g_Keysets[i].defval)
+        {
+            if (!*g_Keysets[i].is_disable) g_Keysets[i].proc(hWnd,message,wParam,lParam);
+            return TRUE;
+        }
+    return FALSE;
+}
+
 BOOL KS_KeyDownProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     DWORD val;

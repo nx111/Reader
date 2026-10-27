@@ -30,6 +30,7 @@ public:
     header_t* default_header();
     BOOL add_mark(item_t *item, int value, const bookmark_detail_t* detail = NULL);
     bookmark_detail_t mark_detail(const item_t* item, int index) const;
+    BOOL set_mark_note(item_t* item, int index, const std::wstring& note);
     BOOL del_mark(item_t *item, int index);
     void rebase_marks(item_t* item, int start, int delta);
 
