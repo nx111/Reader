@@ -176,6 +176,9 @@
     <ClInclude Include="BookmarkData.h" />
     <ClInclude Include="LibraryModel.h" />
     <ClInclude Include="ReadingState.h" />
+    <ClInclude Include="Theme.h" />
+    <ClInclude Include="ThemePalette.h" />
+    <ClInclude Include="GdiSurface.h" />
     <ClInclude Include="DisplaySet.h" />
     <ClInclude Include="DPIAwareness.h" />
     <ClInclude Include="dump.h" />
@@ -221,6 +224,7 @@
     <ClCompile Include="OnlineBook.cpp" />
     <ClCompile Include="OnlineDlg.cpp" />
     <ClCompile Include="Page.cpp" />
+    <ClCompile Include="Theme.cpp" />
     <ClCompile Include="Reader.cpp" />
     <ClCompile Include="tagset.cpp" />
     <ClCompile Include="TextBook.cpp" />

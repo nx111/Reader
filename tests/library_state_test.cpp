@@ -4,6 +4,8 @@
 #include "LibraryModel.h"
 #include "ReadingState.h"
 #include "ReaderText.h"
+#include "ThemePalette.h"
+#include <cmath>
 #include "cJSON.h"
 #include <iostream>
 
@@ -79,7 +81,7 @@ static void Migration()
 static void Invalid()
 {
     const std::string examples[] = {
-        "{", "{}", R"({"schema_version":4,"header":{"item_count":0}})",
+        "{", "{}", R"({"schema_version":4,"header":{"item_count":0}})", R"({"schema_version":5,"header":{"item_count":0}})",
         R"({"schema_version":2.5,"header":{"item_count":0}})",
         R"({"header":{"item_count":1},"items":[]})",
         R"({"header":{"item_count":-1}})",
@@ -268,7 +270,7 @@ static void Geometry()
         assert(narrow.sidebarWidth <= 300 * dpi / 96 && narrow.readingTop == narrow.toolbarHeight);
         auto closed = ComputeReadingGeometry(1000 * dpi / 96, 600 * dpi / 96, dpi, true, false);
         auto wide = ComputeReadingGeometry(1000 * dpi / 96, 600 * dpi / 96, dpi, true, true);
-        assert(!wide.drawer && wide.readingLeft == 240 * dpi / 96);
+        assert(!wide.drawer && wide.readingLeft == (240 * dpi / 96 + 6 * dpi / 96));
         assert(wide.readingRight == closed.readingRight && wide.readingTop == closed.readingTop);
         auto focus = ComputeReadingGeometry(300 * dpi / 96, 500 * dpi / 96, dpi, false, false);
         assert(focus.toolbarHeight == 0 && focus.sidebarWidth == 0 && focus.readingLeft == 0);
@@ -385,6 +387,103 @@ static void Batch()
     assert(cache.delete_items(selected) == 0 && cache.get_header()->item_count == 5000);
     assert(TestFiles.empty()); // Removing original books never performs filesystem deletion.
     assert(cache.new_item(L"C:\\new.txt")->id > ids.back());
+}
+
+
+static void UiPersistence()
+{
+    Reset(); Cache source(L".cache.dat"); assert(source.init());
+    assert(source.get_header()->ui_theme == 0 && source.get_header()->reading_custom == 0 && source.get_header()->sidebar_width == 240);
+    int id = source.new_item(L"C:\\books\\preserve.epub")->id;
+    source.get_by_id(id)->index = 401; source.add_mark(source.get_by_id(id), 17);
+    source.get_header()->bg_color = 0x102030; source.get_header()->font_color = 0xF0E0D0;
+    assert(source.save());
+    cJSON* root = cJSON_Parse(Encoded(Bytes(primary)).c_str()); assert(root);
+    cJSON_SetNumberValue(cJSON_GetObjectItem(root, "schema_version"), 3); cJSON_DeleteItemFromObject(root, "ui");
+    char* json = cJSON_PrintUnformatted(root); std::string legacy = Encoded(json); free(json); cJSON_Delete(root);
+    Put(primary, legacy);
+    Cache migrated(L".cache.dat"); assert(migrated.init());
+    auto header = migrated.get_header();
+    assert(header->reading_custom == 1 && header->sidebar_width == 240 && header->ui_theme == 0);
+    assert(header->bg_color == 0x102030 && header->font_color == 0xF0E0D0);
+    assert(migrated.get_item(0)->id == id && migrated.get_item(0)->index == 401 && migrated.get_item(0)->mark[0] == 17);
+    header->ui_theme = 1; header->reading_custom = 0; header->sidebar_width = 368;
+    assert(migrated.save()); assert(Bytes(L"C:\\Reader\\.cache.dat.v3.bak") == legacy);
+    Cache loaded(L".cache.dat"); assert(loaded.init());
+    assert(loaded.get_header()->ui_theme == 1 && !loaded.get_header()->reading_custom && loaded.get_header()->sidebar_width == 368);
+    assert(loaded.get_header()->bg_color == 0x102030 && loaded.get_header()->font_color == 0xF0E0D0);
+    loaded.get_header()->sidebar_width = 444; TestFailure = "replace"; assert(!loaded.save());
+    Cache unchanged(L".cache.dat"); assert(unchanged.init() && unchanged.get_header()->sidebar_width == 368);
+    TestFailure.clear(); assert(loaded.save());
+    assert(Bytes(L"C:\\Reader\\.cache.dat.v3.bak") == legacy);
+}
+
+static void UiInvalid()
+{
+    const char* values[] = { "null", "{}", "[]", "0", "{\"theme\":2,\"reading_custom\":0,\"sidebar_width\":240}",
+        "{\"theme\":0.5,\"reading_custom\":0,\"sidebar_width\":240}", "{\"theme\":0,\"reading_custom\":2,\"sidebar_width\":240}",
+        "{\"theme\":1,\"reading_custom\":1,\"sidebar_width\":159}", "{\"theme\":1,\"reading_custom\":1,\"sidebar_width\":641}",
+        "{\"theme\":1,\"reading_custom\":1,\"sidebar_width\":240.5}" };
+    for (auto ui : values)
+    {
+        Reset(); std::string original = Encoded(std::string("{\"schema_version\":4,\"header\":{\"item_count\":0},\"ui\":") + ui + "}");
+        Put(primary, original); Cache broken(L".cache.dat"); assert(!broken.init());
+        assert(Bytes(primary) == original && TestOperations.empty());
+    }
+}
+
+static void Splitter()
+{
+    for (int dpi : {96, 120, 144, 168, 192})
+    {
+        int width = ReaderScale(1000, dpi);
+        for (int logical : {160, 240, 368, 640})
+        {
+            auto g = ComputeReadingGeometry(width, ReaderScale(600, dpi), dpi, true, true, logical);
+            assert(g.readingLeft == g.sidebarWidth + g.splitterWidth && g.splitterWidth == ReaderScale(6, dpi));
+            assert(g.sidebarWidth >= ReaderScale(160, dpi) && g.readingRight - g.readingLeft >= ReaderScale(320, dpi));
+            ReaderSplitterDrag drag;
+            drag.Begin(logical, g.sidebarWidth, g.sidebarWidth, dpi);
+            assert(drag.Active());
+            int next = drag.Move(g.sidebarWidth + ReaderScale(32, dpi), width);
+            assert(next >= 160 && next <= 640);
+            assert(drag.Move(-100000, width) == 160);
+            assert(drag.Move(100000, width) == 640);
+            assert(drag.Cancel() == logical && !drag.Active());
+            assert(drag.Move(100000, width) == logical && !drag.Commit(logical));
+            drag.Begin(logical, g.sidebarWidth, g.sidebarWidth, dpi); assert(!drag.Commit(logical));
+            drag.Begin(logical, g.sidebarWidth, g.sidebarWidth, dpi); assert(drag.Commit(logical == 240 ? 320 : 240));
+        }
+        auto small = ComputeReadingGeometry(ReaderScale(700, dpi), ReaderScale(500, dpi), dpi, true, true, 640);
+        assert(!small.drawer && small.readingRight - small.readingLeft >= ReaderScale(320, dpi));
+        auto drawer = ComputeReadingGeometry(ReaderScale(699, dpi), ReaderScale(500, dpi), dpi, true, true, 640);
+        assert(drawer.drawer && !drawer.splitterWidth && drawer.readingLeft == 0);
+        auto focus = ComputeReadingGeometry(width, 600, dpi, false, false, 640);
+        assert(!focus.sidebarWidth && !focus.splitterWidth && !focus.readingTop);
+    }
+}
+
+static double Luminance(uint32_t rgb)
+{
+    double sum = 0; const double factors[] = {0.2126, 0.7152, 0.0722};
+    for (int c = 0; c < 3; ++c) { double v = ((rgb >> (8 * c)) & 255) / 255.; sum += factors[c] * (v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4)); }
+    return sum;
+}
+static double Contrast(uint32_t a, uint32_t b)
+{ double x = Luminance(a), y = Luminance(b); return ((std::max)(x,y) + .05) / ((std::min)(x,y) + .05); }
+static void Palette()
+{
+    for (int dark : {0,1})
+    {
+        ReaderPalette p = MakeReaderPalette(dark);
+        for (uint32_t bg : {p.window, p.surface, p.raised, p.hover, p.pressed}) assert(Contrast(p.text, bg) >= 4.5);
+        assert(Contrast(p.muted, p.window) >= 4.5 && Contrast(p.selectedText, p.selected) >= 4.5);
+        assert(Contrast(p.hitText, p.hit) >= 4.5 && Contrast(p.accent, p.window) >= 3);
+        auto follow = ResolveReaderColors(dark, false, 0x123456, 0x654321, 0xABCDEF, true);
+        assert(follow.background == p.surface && follow.text == p.text && follow.title == p.text && !follow.image);
+        auto custom = ResolveReaderColors(dark, true, 0x123456, 0x654321, 0xABCDEF, true);
+        assert(custom.background == 0x123456 && custom.text == 0x654321 && custom.title == 0xABCDEF && custom.image);
+    }
 }
 
 namespace Bridge {
@@ -576,6 +675,8 @@ int main(int argc, char** argv)
     else if (test == "bookmark_metadata") BookmarkMetadata(); else if (test == "bookmark_invalid") BookmarkInvalid();
     else if (test == "batch") Batch(); else if (test == "search_bridge") Bridge::SearchBridge();
     else if (test == "batch_bridge") Bridge::BatchBridge();
+    else if (test == "ui_persistence") UiPersistence(); else if (test == "ui_invalid") UiInvalid();
+    else if (test == "splitter") Splitter(); else if (test == "palette") Palette();
     else return 2;
     std::cout << test << " passed\n";
 }

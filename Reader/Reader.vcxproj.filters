@@ -45,6 +45,9 @@
     <ClInclude Include="LibraryDlg.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="LibraryModel.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ReadingState.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Theme.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ThemePalette.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="GdiSurface.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Cache.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -112,6 +115,7 @@
   <ItemGroup>
     <ClCompile Include="SearchDlg.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="LibraryDlg.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="Theme.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Reader.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

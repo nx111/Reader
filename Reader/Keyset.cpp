@@ -1,3 +1,4 @@
+#include "Theme.h"
 #include "Keyset.h"
 #include "resource.h"
 
@@ -110,6 +111,7 @@ INT_PTR CALLBACK KS_DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
     switch (message)
     {
     case WM_INITDIALOG:
+        ThemeAttachWindow(hDlg);
 #if ENABLE_GLOBAL_KEY
         if (_header->global_key)
             SendMessage(GetDlgItem(hDlg, IDC_CHECK), BM_SETCHECK, BST_CHECKED, NULL);

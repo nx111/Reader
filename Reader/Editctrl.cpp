@@ -33,6 +33,7 @@ void EC_EnterEditMode(HINSTANCE hInst, HWND hWnd, LOGFONT *font, TCHAR *text, BO
             /*WS_VISIBLE |*/ WS_CHILD /*| WS_BORDER*/ | ES_LEFT | ES_MULTILINE/* | ES_READONLY*/ | ES_AUTOVSCROLL,
             0, 0, 200, 300, hWnd, NULL, hInst, NULL);
 
+        SetProp(g_hEditCtrl, L"ReaderReadingEditor", (HANDLE)1);
         g_defproc = (WNDPROC)SetWindowLongPtr(g_hEditCtrl, GWLP_WNDPROC, (LONG_PTR)EditWndProc);
     }
 

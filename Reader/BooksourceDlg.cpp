@@ -1,3 +1,4 @@
+#include "Theme.h"
 #ifdef ENABLE_NETWORK
 #include "framework.h"
 #include "BooksourceDlg.h"
@@ -723,6 +724,7 @@ static INT_PTR CALLBACK BS_DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARA
     switch (message)
     {
     case WM_INITDIALOG:
+        ThemeAttachWindow(hDlg);
         g_hRequestSync = NULL;
         g_EnableSync = TRUE;
         hList = GetDlgItem(hDlg, IDC_LIST_BOOKSRC);

@@ -3,6 +3,7 @@
 
 #include <vector>
 #include "types.h"
+#include "GdiSurface.h"
 
 typedef struct char_info_t
 {
@@ -82,6 +83,7 @@ public:
     void LineDown(HWND hWnd, BOOL draw = TRUE);
     void DrawPage(HWND hWnd, HDC hdc, RECT *rc, BOOL enable_alpha);
     void ReDraw(HWND hWnd);
+    HDC AlphaDC() const { return m_AlphaSurface.DC(); }
     int  GetPageLength(void);
     int  GetTextLength(void);
     BOOL IsFirstPage(void);
@@ -94,8 +96,6 @@ public:
 
 protected:
     BOOL DrawCover(HDC hdc, RECT *rc);
-    void CreateAlphaTextBitmap(HDC hdc, int width, int height, alpha_dc_info_t *p_alpha_dc);
-    void DeleteAlphaTextBitmap(HDC hdc, alpha_dc_info_t *p_alpha_dc);
     void DrawAlphaText(HDC hdc, char_info_t* p_char, int x, int y, int h, alpha_dc_info_t *p_alpha_dc);
     void BeginDraw(void);
     void EndDraw(void);
@@ -142,6 +142,7 @@ protected:
     header_t *m_header;
 
 private:
+    GdiSurface m_AlphaSurface;
     page_info_t m_PageInfo;
     dc_info_t *m_dcList;
     int m_dcIndex;

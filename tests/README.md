@@ -72,7 +72,7 @@ verified**. Do not interpret that run as a LeakSanitizer pass.
 python -m unittest discover -s tests -p 'test_library_state.py' -v
 ```
 
-The 17 library tests compile production `Cache.cpp`/`Jsondata.cpp` with bundled
+The 21 library tests compile production `Cache.cpp`/`Jsondata.cpp` with bundled
 cJSON and fault-injectable Win32 substitutes. They also compile the actual
 reader import/rebinding and reading-navigation bridge functions, plus the
 production filter/sort/history/geometry helpers. Coverage includes encoded v1
@@ -122,5 +122,25 @@ keyboard role dispatch. `READER_LIBRARY_TEST_FLAGS` also enables sanitizers for
 this harness. These checks do not simulate actual Windows control focus, GDI
 highlight pixels, screen readers, or display scaling.
 
-The full current portable suite is 44 tests: 20 existing format/parser tests,
-17 cache/library/production-bridge tests, and 7 search/text tests.
+## Sidebar, theme and rendering boundaries
+
+```sh
+python -m unittest discover -s tests -p 'test_reader_ui.py' -v
+```
+
+Nine additional checks compile actual production `OnPaint`, `Invalidate`,
+`SyncCurrentChapter`, `CalcPageDown` and `GdiSurface` against GDI/window stand-ins,
+and validate the source contracts for scroll routing, capture/cancel, theme
+coverage, resources, project registration and unchanged workflow build inputs.
+The executable cases cover body-local copies, body-only invalidation, stable
+chapter scroll/selection, too-small reflow anchors, and 200 iterations of buffer
+reuse including allocation failure and safe deselection. They are not real
+Windows GDI, focus, accessibility or flicker tests. The library suite additionally
+checks v3-to-v4 backup/persistence, malformed UI settings, 96/120/144/168/192 DPI
+splitter boundaries and light/dark palette contrast/custom reading semantics.
+`READER_LIBRARY_TEST_FLAGS` also enables sanitizers for these checks.
+
+The full current portable suite is 57 tests: 20 existing format/parser tests,
+21 cache/library/production-bridge tests, 7 search/text tests and 9 UI/rendering
+tests. See [the current local verification record](../doc/sidebar-theme-render.md)
+for the Windows runtime limits and manual checklist.

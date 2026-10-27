@@ -1,4 +1,5 @@
 #include "DisplaySet.h"
+#include "Theme.h"
 #include "resource.h"
 #include "types.h"
 #include "Book.h"
@@ -24,6 +25,7 @@ typedef struct display_set_data_t
     int line_indent;
     int blank_lines;
     int chapter_page;
+    int ui_theme, reading_custom;
     int is_save;
 } display_set_data_t;
 
@@ -65,6 +67,8 @@ static void _update_bg_rgb(HWND hDlg);
 static void _update_preview(HDC hDC, RECT *rc);
 
 #define COPY_DISPLAY_PARAMS(s, d) \
+    (d)->ui_theme = (s)->ui_theme; \
+    (d)->reading_custom = (s)->reading_custom; \
     (d)->font = (s)->font; \
     (d)->font_color = (s)->font_color; \
     (d)->font_title = (s)->font_title; \
@@ -120,7 +124,7 @@ void OpenDisplaySetDlg(void)
         COPY_DISPLAY_PARAMS(&_display, _header);
 
         Save(_hWnd);
-        Invalidate(_hWnd, TRUE, FALSE);
+        ApplyReaderTheme();
 
         if (reset_view)
             SetTreeviewFont();
@@ -140,6 +144,11 @@ static INT_PTR CALLBACK DisplaySetDlgProc(HWND hDlg, UINT message, WPARAM wParam
     switch (message)
     {
     case WM_INITDIALOG:
+        ThemeAttachWindow(hDlg);
+        SendDlgItemMessage(hDlg, IDC_COMBO_THEME, CB_ADDSTRING, 0, (LPARAM)L"明亮");
+        SendDlgItemMessage(hDlg, IDC_COMBO_THEME, CB_ADDSTRING, 0, (LPARAM)L"深色");
+        SendDlgItemMessage(hDlg, IDC_COMBO_THEME, CB_SETCURSEL, _display.ui_theme, 0);
+        CheckDlgButton(hDlg, IDC_CHECK_CUSTOM_READING, _display.reading_custom ? BST_CHECKED : BST_UNCHECKED);
         _init_font_set(hDlg);
         _init_bg_color_set(hDlg);
         _init_bg_image_set(hDlg);
@@ -149,6 +158,8 @@ static INT_PTR CALLBACK DisplaySetDlgProc(HWND hDlg, UINT message, WPARAM wParam
         switch (LOWORD(wParam))
         {
         case IDOK:
+            _display.ui_theme = (int)SendDlgItemMessage(hDlg, IDC_COMBO_THEME, CB_GETCURSEL, 0, 0);
+            _display.reading_custom = IsDlgButtonChecked(hDlg, IDC_CHECK_CUSTOM_READING) == BST_CHECKED;
             if (!_valid_font_set(hDlg))
                 return (INT_PTR)FALSE;
             if (!_valid_bg_color_set(hDlg))
@@ -164,6 +175,17 @@ static INT_PTR CALLBACK DisplaySetDlgProc(HWND hDlg, UINT message, WPARAM wParam
         case IDCANCEL:
             EndDialog(hDlg, LOWORD(wParam));
             return (INT_PTR)TRUE;
+            break;
+        case IDC_COMBO_THEME:
+            if (HIWORD(wParam) == CBN_SELCHANGE)
+            {
+                _display.ui_theme = (int)SendDlgItemMessage(hDlg, IDC_COMBO_THEME, CB_GETCURSEL, 0, 0);
+                InvalidateRect(GetDlgItem(hDlg, IDC_STATIC_PREVIEW), NULL, FALSE);
+            }
+            break;
+        case IDC_CHECK_CUSTOM_READING:
+            _display.reading_custom = IsDlgButtonChecked(hDlg, IDC_CHECK_CUSTOM_READING) == BST_CHECKED;
+            InvalidateRect(GetDlgItem(hDlg, IDC_STATIC_PREVIEW), NULL, FALSE);
             break;
         case IDC_CHECK_SAME:
             res = (int)SendMessage(GetDlgItem(hDlg, IDC_CHECK_SAME), BM_GETCHECK, 0, NULL);
@@ -621,19 +643,22 @@ static void _update_preview(HDC hDC, RECT *p_rc)
     RECT rc;
     Gdiplus::Bitmap *image = NULL;
 
+    ReaderColors colors = ResolveReaderColors(_display.ui_theme, _display.reading_custom != 0,
+        _display.bg_color, _display.font_color, _display.use_same_font ? _display.font_color : _display.font_color_title, _display.bg_image.enable != 0);
     rc = *p_rc;
     memdc = CreateCompatibleDC(hDC);
+    int saved = SaveDC(memdc);
     hFont = CreateFontIndirect(&_display.font);
     if (_display.use_same_font)
     {
         SelectObject(memdc, hFont);
-        SetTextColor(memdc, _display.font_color);
+        SetTextColor(memdc, colors.text);
     }
     else
     {
         hCptFont = CreateFontIndirect(&_display.font_title);
     }
-    image = _load_bg_image(rc.right-rc.left, rc.bottom-rc.top);
+    image = colors.image ? _load_bg_image(rc.right-rc.left, rc.bottom-rc.top) : NULL;
     if (image)
     {
         image->GetHBITMAP(Gdiplus::Color(0, 0, 0, 0), &hBmp);
@@ -643,7 +668,7 @@ static void _update_preview(HDC hDC, RECT *p_rc)
     {
         hBmp = CreateCompatibleBitmap(hDC, rc.right-rc.left, rc.bottom-rc.top);
         SelectObject(memdc, hBmp);
-        hBrush = CreateSolidBrush(_display.bg_color);
+        hBrush = CreateSolidBrush(colors.background);
         SelectObject(memdc, hBrush);
         FillRect(memdc, &rc, hBrush);
     }
@@ -652,33 +677,34 @@ static void _update_preview(HDC hDC, RECT *p_rc)
     if (!_display.use_same_font)
     {
         SelectObject(memdc, hCptFont);
-        SetTextColor(memdc, _display.font_color_title);
+        SetTextColor(memdc, colors.title);
     }
     height = DrawText(memdc, TEXT_CPT1, -1, &rc, DT_CENTER | DT_WORDBREAK);
     rc.top += height + _header->line_gap;
     if (!_display.use_same_font)
     {
         SelectObject(memdc, hFont);
-        SetTextColor(memdc, _display.font_color);
+        SetTextColor(memdc, colors.text);
     }
     height = DrawText(memdc, TEXT1, -1, &rc, DT_CENTER | DT_WORDBREAK);
     rc.top += height + _header->line_gap;
     if (!_display.use_same_font)
     {
         SelectObject(memdc, hCptFont);
-        SetTextColor(memdc, _display.font_color_title);
+        SetTextColor(memdc, colors.title);
     }
     height = DrawText(memdc, TEXT_CPT2, -1, &rc, DT_CENTER | DT_WORDBREAK);
     rc.top += height + _header->line_gap;
     if (!_display.use_same_font)
     {
         SelectObject(memdc, hFont);
-        SetTextColor(memdc, _display.font_color);
+        SetTextColor(memdc, colors.text);
     }
     height = DrawText(memdc, TEXT2, -1, &rc, DT_CENTER | DT_WORDBREAK);
     rc.top += height + _header->line_gap;
     rc = *p_rc;
     BitBlt(hDC, rc.left, rc.top, rc.right-rc.left, rc.bottom-rc.top, memdc, rc.left, rc.top, SRCCOPY);
+    RestoreDC(memdc, saved);
     DeleteObject(hBmp);
     DeleteObject(hFont);
     DeleteObject(hCptFont);

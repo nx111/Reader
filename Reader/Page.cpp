@@ -1,5 +1,7 @@
 #include "Page.h"
 #include "Book.h"
+#include "Theme.h"
+#include <algorithm>
 
 #define CHAR_GAP                (m_header->char_gap)
 #define LINE_GAP                (m_header->line_gap)
@@ -176,8 +178,11 @@ void Page::DrawPage(HWND hWnd, HDC hdc, RECT* rc, BOOL enable_alpha)
 
     if (enable_alpha)
     {
-        memset(&alpha_dc, 0, sizeof(alpha_dc_info_t));
-        CreateAlphaTextBitmap(hdc, rc->right - rc->left, rc->bottom - rc->top, &alpha_dc);
+        int width = rc->right - rc->left, height = rc->bottom - rc->top;
+        if (!m_AlphaSurface.Ensure(hdc, width, height)) return;
+        hdc = m_AlphaSurface.DC();
+        memset(m_AlphaSurface.Pixels(), 0, (size_t)width * height * 4);
+        alpha_dc = { NULL, m_AlphaSurface.Pixels(), width, height };
     }
 
     if (DrawCover(hdc, rc))
@@ -191,12 +196,12 @@ void Page::DrawPage(HWND hWnd, HDC hdc, RECT* rc, BOOL enable_alpha)
         ClearLines();
         if (enable_alpha)
         {
-            DeleteAlphaTextBitmap(hdc, &alpha_dc);
             m_BlankPage = FALSE;
         }
         return;
     }
 
+    int saved = SaveDC(hdc);
     BeginDraw();
 
     switch (m_DrawType)
@@ -237,8 +242,8 @@ void Page::DrawPage(HWND hWnd, HDC hdc, RECT* rc, BOOL enable_alpha)
                 int previousMode = 0;
                 if (match)
                 {
-                    previousColor = SetTextColor(hdc, RGB(0, 0, 0));
-                    previousBackground = SetBkColor(hdc, RGB(255, 230, 110));
+                    previousColor = SetTextColor(hdc, ThemeColors().hitText);
+                    previousBackground = SetBkColor(hdc, ThemeColors().hit);
                     previousMode = SetBkMode(hdc, OPAQUE);
                 }
                 TextOut(hdc, x, y + (p_line->cy - p_char->cy), &m_Text[p_char->idx], 1);
@@ -252,10 +257,7 @@ void Page::DrawPage(HWND hWnd, HDC hdc, RECT* rc, BOOL enable_alpha)
     m_Index = m_PageInfo.start;
     m_PageLength = m_PageInfo.length;
 
-    if (enable_alpha)
-    {
-        DeleteAlphaTextBitmap(hdc, &alpha_dc);
-    }
+    RestoreDC(hdc, saved);
     EndDraw();
     Save(hWnd);
     TestCase(rc);
@@ -445,40 +447,18 @@ BOOL Page::DrawCover(HDC hdc, RECT* rc)
     dst.Y = (h - bh)/2;
     dst.Width = bw;
     dst.Height = bh;
-    g = new Gdiplus::Graphics(hdc);
+    Gdiplus::Bitmap* alphaTarget = NULL;
+    if (hdc == m_AlphaSurface.DC())
+    {
+        alphaTarget = new Gdiplus::Bitmap(w, h, -w * 4, PixelFormat32bppPARGB,
+            m_AlphaSurface.Pixels() + (size_t)(h - 1) * w * 4);
+        g = Gdiplus::Graphics::FromImage(alphaTarget);
+    }
+    else g = new Gdiplus::Graphics(hdc);
     g->SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
     g->DrawImage(cover, dst, src.X, src.Y, src.Width, src.Height, Gdiplus::UnitPixel);
-    delete g;
+    delete g; delete alphaTarget;
     return TRUE;
-}
-
-void Page::CreateAlphaTextBitmap(HDC hdc, int width, int height, alpha_dc_info_t *p_alpha_dc)
-{
-    BITMAPINFOHEADER BMIH;
-
-    // Specify DIB setup
-    memset(&BMIH, 0x0, sizeof(BITMAPINFOHEADER));
-    BMIH.biSize = sizeof(BMIH);
-    BMIH.biWidth = width;
-    BMIH.biHeight = height;
-    BMIH.biPlanes = 1;
-    BMIH.biBitCount = 32;
-    BMIH.biCompression = BI_RGB;
-
-    // Create and select DIB into DC
-    p_alpha_dc->width = width;
-    p_alpha_dc->height = height;
-    p_alpha_dc->hDIB = CreateDIBSection(hdc, (LPBITMAPINFO)&BMIH, 0, (LPVOID*)&p_alpha_dc->pvBits, NULL, 0); 
-    SelectObject(hdc, p_alpha_dc->hDIB);
-}
-
-void Page::DeleteAlphaTextBitmap(HDC hdc, alpha_dc_info_t *p_alpha_dc)
-{
-    if (p_alpha_dc)
-    {
-        if (p_alpha_dc->hDIB)
-            DeleteObject(p_alpha_dc->hDIB);
-    }
 }
 
 void Page::DrawAlphaText(HDC hdc, char_info_t* p_char, int x, int y, int h, alpha_dc_info_t *p_alpha_dc)
@@ -503,16 +483,16 @@ void Page::DrawAlphaText(HDC hdc, char_info_t* p_char, int x, int y, int h, alph
         FillG = GetGValue(m_dcList[p_char->dc_idx].TextColor);
         FillB = GetBValue(m_dcList[p_char->dc_idx].TextColor);
         if (m_SearchStart >= 0 && p_char->idx >= m_SearchStart && p_char->idx - m_SearchStart < m_SearchLength)
-        { FillR = 255; FillG = 96; FillB = 0; }
+        { COLORREF hit = ThemeColors().accent; FillR = GetRValue(hit); FillG = GetGValue(hit); FillB = GetBValue(hit); }
     }
 
     // draw text
     TextOut(hdc, x, y + (h - p_char->cy), &m_Text[p_char->idx], 1);
 
     // convert pixel
-    for (i = p_alpha_dc->height - y - (h - p_char->cy) - 1; i >= p_alpha_dc->height - y - h; i--)
+    for (i = (std::min)(p_alpha_dc->height - 1, p_alpha_dc->height - y - (h - p_char->cy) - 1); i >= (std::max)(0, p_alpha_dc->height - y - h); i--)
     {
-        for (j = x; j < x + p_char->cx; j++)
+        for (j = (std::max)(0, x); j < (std::min)(p_alpha_dc->width, x + p_char->cx); j++)
         {
             DataPtr = &p_alpha_dc->pvBits[(i * p_alpha_dc->width + j) * 4];
 
@@ -551,13 +531,14 @@ void Page::BeginDraw(void)
 #else
     m_dcList = (dc_info_t*)malloc(sizeof(dc_info_t) * 2);
 #endif
+    ReaderColors colors = ThemeReadingColors(m_header);
     m_dcList[0].hFont = CreateFontIndirect(&m_header->font);
     m_dcList[0].BkColor = 0x0;
-    m_dcList[0].TextColor = GetTextAlpha(m_header->font_color);
+    m_dcList[0].TextColor = GetTextAlpha(colors.text);
     m_dcList[0].BkMode = TRANSPARENT;
     m_dcList[1].hFont = CreateFontIndirect(&m_header->font_title);
     m_dcList[1].BkColor = 0x0;
-    m_dcList[1].TextColor = GetTextAlpha(m_header->font_color_title);
+    m_dcList[1].TextColor = GetTextAlpha(colors.title);
     m_dcList[1].BkMode = TRANSPARENT;
 #if ENABLE_TAG
     for (i = 0; i < TAG_COUNT; i++)
@@ -1211,13 +1192,10 @@ void Page::CalcPageDown(HDC hdc, RECT *rc)
     }
     else
     {
-#if 0
-        m_PageInfo.start = m_Index;
-        m_PageInfo.length = m_PageLength;
-#else
-        m_PageInfo.start = m_Index + m_PageLength;
+        // A layout-only repaint may not fit even one glyph. Never skip the
+        // old page when shrinking the body or increasing the font in that case.
+        m_PageInfo.start = m_DrawType == DRAW_NULL ? m_Index : m_Index + m_PageLength;
         m_PageInfo.length = 0;
-#endif
         return;
     }
 }

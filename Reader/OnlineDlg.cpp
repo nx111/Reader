@@ -1,4 +1,5 @@
-﻿#ifdef ENABLE_NETWORK
+﻿#include "Theme.h"
+#ifdef ENABLE_NETWORK
 #include "OnlineDlg.h"
 #include "BooksourceDlg.h"
 #include "resource.h"
@@ -124,6 +125,7 @@ static INT_PTR CALLBACK OnlineDlgProc(HWND hDlg, UINT message, WPARAM wParam, LP
     switch (message)
     {
     case WM_INITDIALOG:
+        ThemeAttachWindow(hDlg);
     {
         g_hRequest = NULL;
         g_Enable = TRUE;

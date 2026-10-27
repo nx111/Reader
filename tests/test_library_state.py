@@ -23,7 +23,7 @@ class LibraryStateTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         work = Path(cls.temp.name)
         for name in ["Cache.cpp", "Cache.h", "Jsondata.cpp", "Jsondata.h", "types.h",
-                     "Keyset.h", "Utils.h", "Upgrade.h", "DPIAwareness.h", "LibraryModel.h", "ReadingState.h", "BookmarkData.h", "SearchDlg.h", "ReaderText.h"]:
+                     "Keyset.h", "Utils.h", "Upgrade.h", "DPIAwareness.h", "LibraryModel.h", "ReadingState.h", "BookmarkData.h", "SearchDlg.h", "ReaderText.h", "ThemePalette.h"]:
             shutil.copy2(ROOT / "Reader" / name, work / name)
         # POSIX exposes overloads for strcasestr; the untouched Windows declaration
         # is unused by these tests and cannot coexist with that host declaration.
@@ -83,6 +83,18 @@ class LibraryStateTests(unittest.TestCase):
 
     def test_geometry_drawer_wide_focus_and_100_to_200_percent_dpi(self):
         self.run_case("geometry")
+
+    def test_ui_schema_migration_backup_and_persistence_preserve_books(self):
+        self.run_case("ui_persistence")
+
+    def test_malformed_theme_or_sidebar_settings_preserve_original_cache(self):
+        self.run_case("ui_invalid")
+
+    def test_splitter_clamps_dpi_cancel_and_repeated_drag(self):
+        self.run_case("splitter")
+
+    def test_theme_color_contrast_and_custom_reading_semantics(self):
+        self.run_case("palette")
 
     def test_many_imports_keep_active_identity_and_progress(self):
         self.run_case("large")

@@ -1,3 +1,4 @@
+#include "Theme.h"
 #include "tagset.h"
 
 #if ENABLE_TAG
@@ -272,6 +273,8 @@ INT_PTR CALLBACK TS_DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
     switch (message)
     {
     case WM_INITDIALOG:
+        ThemeAttachWindow(hDlg);
+        SetProp(GetDlgItem(hDlg, IDC_STATIC_PREVIEW), L"ReaderColorPreview", (HANDLE)1);
         hList = GetDlgItem(hDlg, IDC_LIST_TAGSET);
         ListView_SetExtendedListViewStyleEx(hList, LVS_REPORT|LVM_SETEXTENDEDLISTVIEWSTYLE, 
             LVS_EX_AUTOSIZECOLUMNS|LVS_EX_GRIDLINES|LVS_EX_FULLROWSELECT/*|LVS_EX_CHECKBOXES*/);
@@ -461,7 +464,7 @@ INT_PTR CALLBACK TS_DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             {
                 SetBkMode((HDC)wParam, TRANSPARENT);
             }
-            return (BOOL)CreateSolidBrush (GetSysColor(COLOR_MENU));
+            return (INT_PTR)ThemeWindowBrush();
         }
         break;
     default:
@@ -493,6 +496,8 @@ INT_PTR CALLBACK TS_item_DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
     switch (message)
     {
     case WM_INITDIALOG:
+        ThemeAttachWindow(hDlg);
+        SetProp(GetDlgItem(hDlg, IDC_STATIC_PREVIEW), L"ReaderColorPreview", (HANDLE)1);
         if (s_font)
         {
             DeleteObject(s_font);
@@ -626,7 +631,7 @@ INT_PTR CALLBACK TS_item_DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
             {
                 SetBkMode((HDC)wParam, TRANSPARENT);
             }
-            return (BOOL)CreateSolidBrush (GetSysColor(COLOR_MENU));
+            return (INT_PTR)ThemeWindowBrush();
         }
         break;
     default:

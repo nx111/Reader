@@ -10,7 +10,7 @@
 #define ASSERT(x)
 #endif
 
-#define CACHE_SCHEMA_VERSION       3
+#define CACHE_SCHEMA_VERSION       4
 #define MAX_LIBRARY_ITEMS          100000
 
 #define IDM_LIBRARY                 46001
@@ -207,6 +207,9 @@ typedef struct header_t
     int item_id; // stable identity of the last opened book
     int cache_schema;
     int next_item_id;
+    int ui_theme; // 0 light, 1 dark
+    int reading_custom; // preserve explicit reading colors/images
+    int sidebar_width; // logical 96-DPI pixels, retained when window clamps it
     WINDOWPLACEMENT placement;
     WINDOWPLACEMENT fs_placement; // fullscreen restore
     RECT fs_rect; // fullscreen restore

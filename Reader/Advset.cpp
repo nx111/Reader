@@ -1,3 +1,4 @@
+#include "Theme.h"
 #include "resource.h"
 #include "Advset.h"
 #include "Editctrl.h"
@@ -38,6 +39,7 @@ static INT_PTR CALLBACK ADV_DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
     switch (message)
     {
     case WM_INITDIALOG:
+        ThemeAttachWindow(hDlg);
         s_rule = g_rule->rule;
         if (s_rule == 0) // default
         {

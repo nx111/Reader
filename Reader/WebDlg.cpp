@@ -1,3 +1,4 @@
+#include "Theme.h"
 #ifdef ENABLE_NETWORK
 
 /*
@@ -645,6 +646,7 @@ static INT_PTR CALLBACK WebDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARA
     switch (message)
     {
     case WM_INITDIALOG:
+        ThemeAttachWindow(hDlg);
     {
         HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_BOOK));
         HWND hList = GetDlgItem(hDlg, IDC_WEB_LIST);

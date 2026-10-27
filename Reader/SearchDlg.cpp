@@ -1,3 +1,4 @@
+#include "Theme.h"
 #include "SearchDlg.h"
 #include "DPIAwareness.h"
 #include <commctrl.h>
@@ -138,7 +139,8 @@ LRESULT DrawHit(NMLVCUSTOMDRAW* draw)
     bool selected = (ListView_GetItemState(results, row, LVIS_SELECTED) & LVIS_SELECTED) != 0;
     HDC dc = draw->nmcd.hdc; int saved = SaveDC(dc);
     IntersectClipRect(dc, rc.left, rc.top, rc.right, rc.bottom);
-    FillRect(dc, &rc, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+    HBRUSH background = CreateSolidBrush(selected ? ThemeColors().selected : ThemeColors().surface);
+    FillRect(dc, &rc, background); DeleteObject(background);
     SetBkMode(dc, TRANSPARENT); SelectObject(dc, font);
     int x = rc.left + Scale(4);
     std::wstring parts[] = { excerpt.text.substr(0, excerpt.matchStart), excerpt.text.substr(excerpt.matchStart, excerpt.matchLength), excerpt.text.substr(excerpt.matchStart + excerpt.matchLength) };
@@ -148,9 +150,9 @@ LRESULT DrawHit(NMLVCUSTOMDRAW* draw)
         if (i == 1)
         {
             RECT hit = { x, rc.top, x + size.cx, rc.bottom };
-            HBRUSH brush = CreateSolidBrush(RGB(255, 230, 110)); FillRect(dc, &hit, brush); DeleteObject(brush);
+            HBRUSH brush = CreateSolidBrush(ThemeColors().hit); FillRect(dc, &hit, brush); DeleteObject(brush);
         }
-        SetTextColor(dc, i == 1 ? RGB(0, 0, 0) : GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+        SetTextColor(dc, i == 1 ? ThemeColors().hitText : selected ? ThemeColors().selectedText : ThemeColors().text);
         TextOut(dc, x, rc.top + ((rc.bottom - rc.top - size.cy) / 2), parts[i].c_str(), (int)parts[i].size());
         x += size.cx;
     }
@@ -184,7 +186,7 @@ LRESULT CALLBACK SearchProc(HWND handle, UINT message, WPARAM wParam, LPARAM lPa
             for (int i = 0; i < 3; ++i) { LVCOLUMN column = {}; column.mask = LVCF_WIDTH | LVCF_TEXT; column.cx = Scale(widths[i]); column.pszText = (wchar_t*)titles[i]; ListView_InsertColumn(results, i, &column); }
             status = CreateWindow(L"STATIC", L"输入搜索词后按 Enter。", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, handle, (HMENU)status_id, NULL, NULL);
             for (HWND child = GetWindow(handle, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) SendMessage(child, WM_SETFONT, (WPARAM)font, TRUE);
-            EnableWindow(GetDlgItem(handle, cancel_id), FALSE); Layout();
+            EnableWindow(GetDlgItem(handle, cancel_id), FALSE); Layout(); ThemeAttachWindow(handle);
         } return 0;
     case WM_SIZE: Layout(); return 0;
     case WM_GETMINMAXINFO:

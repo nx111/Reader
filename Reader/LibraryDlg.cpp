@@ -1,3 +1,4 @@
+#include "Theme.h"
 #include "LibraryDlg.h"
 #include "LibraryModel.h"
 #include "ReaderText.h"
@@ -446,7 +447,7 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             { LVCOLUMN col = {}; col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM; col.pszText = (wchar_t*)titles[i]; col.cx = Scale(widths[i]); col.iSubItem = i; ListView_InsertColumn(list, i, &col); }
             status = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, (HMENU)status_id, NULL, NULL);
             for (HWND child = GetWindow(window, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) SendMessage(child, WM_SETFONT, (WPARAM)uiFont, TRUE);
-            SetBusy(false); Layout(); RefreshRows();
+            SetBusy(false); Layout(); RefreshRows(); ThemeAttachWindow(window);
         } return 0;
     case WM_SIZE: Layout(); return 0;
     case WM_GETMINMAXINFO:

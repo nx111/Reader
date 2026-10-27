@@ -302,6 +302,7 @@ void Cache::default_header(header_t* header)
 {
     header->cache_schema = CACHE_SCHEMA_VERSION;
     if (header->next_item_id < 1) header->next_item_id = 1;
+    header->ui_theme = 0; header->reading_custom = 0; header->sidebar_width = 240;
     // default font
     static HFONT hFont = NULL;
     static LOGFONT lf;
