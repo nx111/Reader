@@ -159,3 +159,18 @@ double GetDpiScaled(void)
     GetDPI(&dpix, &dpiy);
     return (((double)dpix)/((double)DEFAULT_DPI));
 }
+
+UINT GetWindowDpiCompat(HWND hWnd)
+{
+    typedef UINT (WINAPI* get_dpi_fn)(HWND);
+    static get_dpi_fn getDpi = (get_dpi_fn)GetProcAddress(GetModuleHandle(_T("user32.dll")), "GetDpiForWindow");
+    if (getDpi && hWnd)
+    {
+        UINT dpi = getDpi(hWnd);
+        if (dpi) return dpi;
+    }
+    HDC dc = GetDC(hWnd);
+    UINT dpi = (UINT)GetDeviceCaps(dc, LOGPIXELSX);
+    ReleaseDC(hWnd, dc);
+    return dpi ? dpi : DEFAULT_DPI;
+}

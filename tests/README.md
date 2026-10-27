@@ -65,3 +65,42 @@ Some sandbox runners use ptrace, which prevents LeakSanitizer from starting. In
 that environment use `ASAN_OPTIONS=detect_leaks=0` with the sanitizer command;
 address/undefined-behavior checks remain enabled, but **leak checking is not
 verified**. Do not interpret that run as a LeakSanitizer pass.
+
+## Library, migration, navigation and layout
+
+```sh
+python -m unittest discover -s tests -p 'test_library_state.py' -v
+```
+
+The 12 library tests compile production `Cache.cpp`/`Jsondata.cpp` with bundled
+cJSON and fault-injectable Win32 substitutes. They also compile the actual
+reader import/rebinding and reading-navigation bridge functions, plus the
+production filter/sort/history/geometry helpers. Coverage includes encoded v1
+migration, unchanged order/marks/unknown dates, corrupt/future/partial caches,
+backup/flush/replace failure retry, external writers, stable IDs after reorder or
+clear, path/file-ID deduplication, relink collision merging/capacity rollback,
+Unicode search, sorting, 20,000 entries, live reader rebinding and asynchronous
+chapter-return failure rollback. Geometry is checked at 96/120/144/192 DPI.
+
+```sh
+READER_LIBRARY_TEST_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+  ASAN_OPTIONS=detect_leaks=0 \
+  python -m unittest discover -s tests -p 'test_library_state.py' -v
+```
+
+File operations are an in-memory test double, not an NTFS durability test; the
+layout checks are mathematical, not actual Windows font/GDI/control/focus tests.
+See [the manual Windows checklist](../doc/library-usability.md).
+
+Optional Linux MinGW API/type syntax checks (compiler must already be installed):
+
+```sh
+python tests/check_windows_syntax.py --network
+python tests/check_windows_syntax.py
+```
+
+Use `--compiler /path/to/x86_64-w64-mingw32-g++` and, if needed,
+`--windows-include /path/to/mingw/include` for a local toolchain. These checks
+include both networking configurations of all changed translation units.
+`-fpermissive`, temporary header-name aliases and an MSVC-style `max()` adapter
+accommodate existing MSVC-specific source; they do not certify MSVC linkage.

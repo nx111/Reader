@@ -27,7 +27,7 @@ EpubBook::~EpubBook()
     {
         delete m_Cover;
     }
-    xmlCleanupParser();
+    // libxml process state is shared with the library metadata worker.
 }
 
 book_type_t EpubBook::GetBookType()

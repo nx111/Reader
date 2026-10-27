@@ -10,6 +10,7 @@ static BOOL g_bChanged = FALSE;
 static INT_PTR CALLBACK ADV_DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
 extern Book *_Book;
+extern item_t* _item;
 extern LRESULT OnOpenItem(HWND hWnd, int item_id, BOOL forced);
 extern int MessageBox_(HWND, UINT, UINT, UINT);
 
@@ -25,8 +26,8 @@ void ADV_OpenDlg(HINSTANCE hInst, HWND hWnd, chapter_rule_t *rule)
     if (g_bChanged)
     {
         // reload book
-        if (_Book && _Book->GetBookType() == book_text)
-            OnOpenItem(hWnd, 0, TRUE);
+        if (_Book && _item && _Book->GetBookType() == book_text)
+            OnOpenItem(hWnd, _item->id, TRUE);
     }
 }
 

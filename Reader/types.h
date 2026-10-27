@@ -10,6 +10,15 @@
 #define ASSERT(x)
 #endif
 
+#define CACHE_SCHEMA_VERSION       2
+#define MAX_LIBRARY_ITEMS          100000
+
+#define IDM_LIBRARY                 46001
+#define IDM_NAV_BACK                46002
+#define IDM_NAV_FORWARD             46003
+#define IDM_READER_SEARCH           46004
+#define IDM_FOCUS                   46005
+
 #define CACHE_FILE_NAME             _T(".cache.dat")
 #define ONLINE_FILE_SAVE_PATH       _T(".online\\")
 
@@ -77,12 +86,19 @@ typedef unsigned long long          u64;
 
 typedef struct item_t
 {
-    int id;
+    int id; // stable identity, never a row index or reused after removal
     int index; // save text current pos
     TCHAR file_name[MAX_PATH];
     int mark_size;
     int mark[MAX_MARK_COUNT]; // book mark
     int is_new;
+    TCHAR title[256];
+    TCHAR author[256];
+    TCHAR file_key[64]; // volume serial + file index, when available
+    int text_length; // zero means unknown (legacy/imported, not yet read)
+    int read_state; // 0: unread, 1: reading, 2: read
+    int favorite;
+    u64 last_read; // actual UTC Unix seconds; zero means unknown
 } item_t;
 
 typedef enum bg_image_mode_t
@@ -188,7 +204,9 @@ typedef struct header_t
 {
     TCHAR version[16];
     int item_count;
-    int item_id;
+    int item_id; // stable identity of the last opened book
+    int cache_schema;
+    int next_item_id;
     WINDOWPLACEMENT placement;
     WINDOWPLACEMENT fs_placement; // fullscreen restore
     RECT fs_rect; // fullscreen restore

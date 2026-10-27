@@ -52,6 +52,13 @@ void Page::Init(int *p_index, header_t *header)
         m_Index = 0;
 }
 
+void Page::SetReadingPosition(int position)
+{
+    if (!m_pIndex || m_Length <= 0) return;
+    m_Index = position < 0 ? 0 : position >= m_Length ? m_Length - 1 : position;
+    ResetLayout();
+}
+
 void Page::PageUp(HWND hWnd, BOOL draw)
 {
     if (!OnUpDownEvent(hWnd, DRAW_PAGE_UP))

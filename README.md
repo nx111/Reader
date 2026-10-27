@@ -1,6 +1,10 @@
 # Reader
 A Win32 text, EPUB, Mobipocket/Kindle and online file reader
 
+## 本地书库与阅读导航
+
+支持批量索引原文件、失联记录重新关联、搜索筛选排序、可折叠联动目录、返回／前进导航；保留旧进度和书签并备份迁移缓存。`Ctrl+L` 打开书库，`Ctrl+T` 切换目录，`F8` 专注。详见 [使用与迁移说明](doc/library-usability.md)。
+
 ## 本地电子书格式支持
 - 支持 TXT、EPUB，以及现有 libmobi 可解析的无 DRM MOBI / KF8 容器：`.mobi`、`.azw3`、`.azw`、`.prc`。
 - `.pdb` 仅支持 libmobi 可解析的 PalmDoc 文本电子书，不支持任意 Palm 数据库；`.prc` 也不支持 Palm 应用程序。无 MOBI 编码头的旧 PalmDoc 按 CP1252 解码，纯文本保留字面标签/实体，明确的 HTML 文档沿用 HTML 阅读方式。

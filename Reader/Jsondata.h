@@ -5,7 +5,7 @@
 
 char* create_json(header_t* data);
 void create_json_free(char* json);
-BOOL parser_json(const char* json, header_t* defhdr, void **data, int *size);
+BOOL parser_json(const char* json, header_t* defhdr, void **data, int *size, int *source_schema = NULL);
 
 BOOL import_book_source(const char *json, book_source_t *bs, int *count);
 BOOL export_book_source(const book_source_t *bs, int count, char **json);

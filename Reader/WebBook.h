@@ -58,6 +58,7 @@ public:
     virtual BOOL UpdateChapters(int offset);
     virtual BOOL IsLoading(void);
     virtual void JumpChapter(HWND hWnd, int index);
+    virtual void SetReadingPosition(int position);
     virtual void JumpPrevChapter(HWND hWnd);
     virtual void JumpNextChapter(HWND hWnd);
     virtual int GetCurChapterIndex(void);

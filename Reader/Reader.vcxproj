@@ -170,6 +170,9 @@
     <ClInclude Include="Book.h" />
     <ClInclude Include="BooksourceDlg.h" />
     <ClInclude Include="Cache.h" />
+    <ClInclude Include="LibraryDlg.h" />
+    <ClInclude Include="LibraryModel.h" />
+    <ClInclude Include="ReadingState.h" />
     <ClInclude Include="DisplaySet.h" />
     <ClInclude Include="DPIAwareness.h" />
     <ClInclude Include="dump.h" />
@@ -208,6 +211,7 @@
     <ClCompile Include="EpubBook.cpp" />
     <ClCompile Include="HtmlParser.cpp" />
     <ClCompile Include="Jsondata.cpp" />
+    <ClCompile Include="LibraryDlg.cpp" />
     <ClCompile Include="Keyset.cpp" />
     <ClCompile Include="MobiBook.cpp" />
     <ClCompile Include="OnlineBook.cpp" />

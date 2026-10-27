@@ -2,6 +2,8 @@
 #define __CACHE_H__
 
 #include "types.h"
+#include <map>
+#include <string>
 
 class Cache
 {
@@ -13,10 +15,14 @@ public:
     BOOL exit();
     BOOL save();
     header_t* get_header();
-    item_t* get_item(int item_id);
+    item_t* get_item(int row); // enumeration only
+    item_t* get_by_id(int id);
     item_t* open_item(int item_id);
-    item_t* new_item(TCHAR* file_name);
-    item_t* find_item(TCHAR* file_name);
+    item_t* new_item(const TCHAR* file_name, const TCHAR* key = NULL);
+    item_t* find_item(const TCHAR* file_name, const TCHAR* key = NULL);
+    BOOL relink_item(int id, const TCHAR* file_name, const TCHAR* key = NULL);
+    static BOOL canonical_path(const TCHAR* path, TCHAR* full);
+    static void file_key(const TCHAR* path, TCHAR* key);
     BOOL delete_item(int item_id);
     BOOL delete_all_item(void);
     header_t* default_header();
@@ -29,6 +35,7 @@ private:
     BOOL read(void **data, int *size);
     BOOL write(void *data, int size);
     void update_addr(void);
+    void rebuild_indexes();
     void encode(void *data, int size);
     void decode(void* data, int size);
 
@@ -36,8 +43,12 @@ private:
     TCHAR m_file_name[MAX_PATH];
     void* m_buffer;
     int   m_size;
+    int   m_capacity;
     void* m_jsonbak;
     int   m_jsonlen;
+    BOOL  m_needsMigration;
+    std::map<std::wstring, int> m_paths, m_keys;
+    std::map<int, int> m_rows;
 };
 
 #endif

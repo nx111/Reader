@@ -16,6 +16,8 @@ void RestoreFontForDpi(LOGFONT *lf);
 void DpiChanged(HWND hWnd, LOGFONT *lf, RECT *rect, WPARAM newdpi, RECT *newRect);
 
 double GetDpiScaled(void);
+// Dynamically resolved so older Windows versions retain the device-DC fallback.
+UINT GetWindowDpiCompat(HWND hWnd);
 
 
 #endif

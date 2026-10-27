@@ -115,6 +115,7 @@ void                UpdateProgess(void);
 void                UpdateTitle(HWND);
 void                RemoveMenus(HWND, BOOL);
 BOOL                GetClientRectExceptStatusBar(HWND, RECT*);
+BOOL                GetReadingRect(HWND, RECT*);
 void                WheelSpeedInit(HWND);
 Gdiplus::Bitmap*    LoadBGImage(int, int, BYTE alpha=0xFF);
 BOOL                FileExists(TCHAR *);

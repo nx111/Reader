@@ -893,6 +893,12 @@ void WebBook::RequestChapter(HWND hWnd, int index, int pos)
     }
 }
 
+void WebBook::SetReadingPosition(int position)
+{
+    Page::SetReadingPosition(position);
+    m_PendingPos = m_Index;
+}
+
 void WebBook::JumpChapter(HWND hWnd, int index)
 {
     if (index < 0 || index >= (int)m_Chapters.size())

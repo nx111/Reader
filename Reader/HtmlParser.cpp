@@ -13,7 +13,7 @@ HtmlParser::HtmlParser()
 
 HtmlParser::~HtmlParser()
 {
-    xmlCleanupParser();
+    // Parser globals live until process exit; metadata workers can still use them.
 }
 
 HtmlParser* HtmlParser::Instance()

@@ -72,6 +72,9 @@ public:
     virtual ~Page();
 
     void Init(int *p_index, header_t *header);
+    void Rebind(int* index, header_t* header) { m_pIndex = index; m_header = header; }
+    void ResetLayout() { m_DrawType = DRAW_NULL; m_LineCount = 0; }
+    virtual void SetReadingPosition(int position);
     void PageUp(HWND hWnd, BOOL draw = TRUE);
     void PageDown(HWND hWnd, BOOL draw = TRUE);
     void LineUp(HWND hWnd, BOOL draw = TRUE);

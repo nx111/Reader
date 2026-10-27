@@ -13,7 +13,7 @@ extern keydata_t g_Keysets[KI_MAXCOUNT];
 extern Book *_Book;
 extern HWND _hWnd;
 extern window_info_t _WndInfo;
-extern BOOL GetClientRectExceptStatusBar(HWND hWnd, RECT* rc);
+extern BOOL GetReadingRect(HWND hWnd, RECT* rc);
 extern DWORD ToHotkey(WPARAM wParam);
 extern int MessageBox_(HWND, UINT, UINT, UINT);
 extern LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -37,7 +37,7 @@ void EC_EnterEditMode(HINSTANCE hInst, HWND hWnd, LOGFONT *font, TCHAR *text, BO
 
     EnableAllMenu(hWnd, FALSE);
 
-    GetClientRectExceptStatusBar(hWnd, &rc);
+    GetReadingRect(hWnd, &rc);
 
     if (g_hFont)
     {
@@ -47,6 +47,7 @@ void EC_EnterEditMode(HINSTANCE hInst, HWND hWnd, LOGFONT *font, TCHAR *text, BO
     SetWindowPos(g_hEditCtrl, NULL, rc.left, rc.top, rc.right-rc.left, rc.bottom-rc.top, SWP_NOREDRAW);
     SendMessage(g_hEditCtrl, WM_SETFONT, (WPARAM)g_hFont, TRUE);
     SendMessage(g_hEditCtrl, WM_SETTEXT, 0, (LPARAM)text);
+    OffsetRect(&rc, -rc.left, -rc.top);
     SendMessage(g_hEditCtrl, EM_SETRECT, 0, (LPARAM)&rc);
     SendMessage(g_hEditCtrl, EM_SETREADONLY, (WPARAM)readonly, NULL);
 
@@ -103,6 +104,7 @@ void EC_LeaveEditMode(void)
         g_hFont = NULL;
         g_IsEditMode = FALSE;
         EnableAllMenu(GetParent(g_hEditCtrl), TRUE);
+        PostMessage(GetParent(g_hEditCtrl), WM_SIZE, 0, 0);
         if (g_text)
         {
             free(g_text);

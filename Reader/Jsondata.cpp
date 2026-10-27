@@ -3,6 +3,22 @@
 #include "Keyset.h"
 #include "Utils.h"
 #include <stdio.h>
+#include <set>
+#include <limits.h>
+#include <math.h>
+
+// Bound copies even when an older settings file contains unexpected strings.
+template<size_t N> static void JsonCopy(wchar_t (&out)[N], const char* value)
+{
+    if (!value) return;
+    const wchar_t* wide = Utf8ToUtf16(value);
+    if (wide) { wcsncpy(out, wide, N - 1); out[N - 1] = 0; }
+}
+template<size_t N> static void JsonCopy(char (&out)[N], const char* value)
+{
+    if (value) { strncpy(out, value, N - 1); out[N - 1] = 0; }
+}
+
 
 
 cJSON* cJSON_AddULongToObject(cJSON* const object, const char* const name, const u32 number)
@@ -79,11 +95,11 @@ class json_placement_t
     cJSON* length;
     cJSON* flags;
     cJSON* showCmd;
-    json_point* ptMinPosition;
-    json_point* ptMaxPosition;
-    json_rect_t* rcNormalPosition;
+    json_point* ptMinPosition = NULL;
+    json_point* ptMaxPosition = NULL;
+    json_rect_t* rcNormalPosition = NULL;
 #ifdef _MAC
-    json_rect_t* rcDevice;
+    json_rect_t* rcDevice = NULL;
 #endif
 
 public:
@@ -257,7 +273,7 @@ public:
         if (lfPitchAndFamily)
             data->lfPitchAndFamily = (BYTE)lfPitchAndFamily->valueint;
         if (lfFaceName)
-            wcscpy(data->lfFaceName, Utf8ToUtf16(lfFaceName->valuestring));
+            JsonCopy(data->lfFaceName, lfFaceName->valuestring);
     }
 };
 
@@ -286,7 +302,7 @@ public:
         if (mode)
             data->mode = mode->valueint;
         if (file_name)
-            wcscpy(data->file_name, Utf8ToUtf16(file_name->valuestring));
+            JsonCopy(data->file_name, file_name->valuestring);
     }
 };
 
@@ -321,11 +337,11 @@ public:
         if (port)
             data->port = port->valueint;
         if (addr)
-            wcscpy(data->addr, Utf8ToUtf16(addr->valuestring));
+            JsonCopy(data->addr, addr->valuestring);
         if (user)
-            wcscpy(data->user, Utf8ToUtf16(user->valuestring));
+            JsonCopy(data->user, user->valuestring);
         if (pass)
-            wcscpy(data->pass, Utf8ToUtf16(pass->valuestring));
+            JsonCopy(data->pass, pass->valuestring);
     }
 };
 
@@ -376,9 +392,9 @@ public:
         if (rule)
             data->rule = rule->valueint;
         if (keyword)
-            wcscpy(data->keyword, Utf8ToUtf16(keyword->valuestring));
+            JsonCopy(data->keyword, keyword->valuestring);
         if (regex)
-            wcscpy(data->regex, Utf8ToUtf16(regex->valuestring));
+            JsonCopy(data->regex, regex->valuestring);
     }
 };
 
@@ -386,7 +402,7 @@ public:
 class json_tagitem_t
 {
     cJSON* enable;
-    json_font_t* font;
+    json_font_t* font = NULL;
     cJSON* font_color;
     cJSON* bg_color;
     cJSON* keyword;
@@ -428,7 +444,7 @@ public:
         if (bg_color)
             data->bg_color = *((u32*)&bg_color->valueint);
         if (keyword)
-            wcscpy(data->keyword, Utf8ToUtf16(keyword->valuestring));
+            JsonCopy(data->keyword, keyword->valuestring);
         if (font)
             font->GetData(&(data->font));
     }
@@ -519,53 +535,53 @@ public:
     void GetData(book_source_t* data)
     {
         if (title)
-            wcscpy(data->title, Utf8ToUtf16(title->valuestring));
+            JsonCopy(data->title, title->valuestring);
         if (host)
-            strcpy(data->host, host->valuestring);
+            JsonCopy(data->host, host->valuestring);
         if (query_url)
-            strcpy(data->query_url, query_url->valuestring);
+            JsonCopy(data->query_url, query_url->valuestring);
         if (query_method)
             data->query_method = query_method->valueint;
         if (query_params)
-            strcpy(data->query_params, query_params->valuestring);
+            JsonCopy(data->query_params, query_params->valuestring);
         if (query_charset)
             data->query_charset = query_charset->valueint;
         if (book_name_xpath)
-            strcpy(data->book_name_xpath, book_name_xpath->valuestring);
+            JsonCopy(data->book_name_xpath, book_name_xpath->valuestring);
         if (book_mainpage_xpath)
-            strcpy(data->book_mainpage_xpath, book_mainpage_xpath->valuestring);
+            JsonCopy(data->book_mainpage_xpath, book_mainpage_xpath->valuestring);
         if (book_author_xpath)
-            strcpy(data->book_author_xpath, book_author_xpath->valuestring);
+            JsonCopy(data->book_author_xpath, book_author_xpath->valuestring);
         if (enable_chapter_page)
             data->enable_chapter_page = enable_chapter_page->valueint;
         if (chapter_page_xpath)
-            strcpy(data->chapter_page_xpath, chapter_page_xpath->valuestring);
+            JsonCopy(data->chapter_page_xpath, chapter_page_xpath->valuestring);
         if (chapter_title_xpath)
-            strcpy(data->chapter_title_xpath, chapter_title_xpath->valuestring);
+            JsonCopy(data->chapter_title_xpath, chapter_title_xpath->valuestring);
         if (chapter_url_xpath)
-            strcpy(data->chapter_url_xpath, chapter_url_xpath->valuestring);
+            JsonCopy(data->chapter_url_xpath, chapter_url_xpath->valuestring);
         if (enable_chapter_next)
             data->enable_chapter_next = enable_chapter_next->valueint;
         if (chapter_next_url_xpath)
-            strcpy(data->chapter_next_url_xpath, chapter_next_url_xpath->valuestring);
+            JsonCopy(data->chapter_next_url_xpath, chapter_next_url_xpath->valuestring);
         if (chapter_next_keyword_xpath)
-            strcpy(data->chapter_next_keyword_xpath, chapter_next_keyword_xpath->valuestring);
+            JsonCopy(data->chapter_next_keyword_xpath, chapter_next_keyword_xpath->valuestring);
         if (chapter_next_keyword)
-            strcpy(data->chapter_next_keyword, chapter_next_keyword->valuestring);
+            JsonCopy(data->chapter_next_keyword, chapter_next_keyword->valuestring);
         if (content_xpath)
-            strcpy(data->content_xpath, content_xpath->valuestring);
+            JsonCopy(data->content_xpath, content_xpath->valuestring);
         if (enable_content_next)
             data->enable_content_next = enable_content_next->valueint;
         if (content_next_url_xpath)
-            strcpy(data->content_next_url_xpath, content_next_url_xpath->valuestring);
+            JsonCopy(data->content_next_url_xpath, content_next_url_xpath->valuestring);
         if (content_next_keyword_xpath)
-            strcpy(data->content_next_keyword_xpath, content_next_keyword_xpath->valuestring);
+            JsonCopy(data->content_next_keyword_xpath, content_next_keyword_xpath->valuestring);
         if (content_next_keyword)
-            strcpy(data->content_next_keyword, content_next_keyword->valuestring);
+            JsonCopy(data->content_next_keyword, content_next_keyword->valuestring);
         if (content_filter_type)
             data->content_filter_type = content_filter_type->valueint;
         if (content_filter_keyword)
-            wcscpy(data->content_filter_keyword, Utf8ToUtf16(content_filter_keyword->valuestring));
+            JsonCopy(data->content_filter_keyword, content_filter_keyword->valuestring);
     }
 };
 
@@ -605,15 +621,15 @@ class json_header_t
     cJSON* global_key;
     cJSON* cust_colors;
     json_keyset_t* keyset[KI_MAXCOUNT];
-    json_placement_t* placement;
-    json_placement_t* fs_placement;
-    json_rect_t* fs_rect;
-    json_rect_t* internal_border;
-    json_font_t* font;
-    json_font_t* font_title;
-    json_bg_image_t* bg_image;
-    json_proxy_t* proxy;
-    json_chapter_rule_t* chapter_rule;
+    json_placement_t* placement = NULL;
+    json_placement_t* fs_placement = NULL;
+    json_rect_t* fs_rect = NULL;
+    json_rect_t* internal_border = NULL;
+    json_font_t* font = NULL;
+    json_font_t* font_title = NULL;
+    json_bg_image_t* bg_image = NULL;
+    json_proxy_t* proxy = NULL;
+    json_chapter_rule_t* chapter_rule = NULL;
 #if ENABLE_TAG
     cJSON* tag_count;
     json_tagitem_t* tags[MAX_TAG_COUNT];
@@ -790,7 +806,7 @@ public:
         if (array)
         {
             size = cJSON_GetArraySize(array);
-            for (i = 0; i < size; i++)
+            for (i = 0; i < size && i < KI_MAXCOUNT; i++)
             {
                 item = cJSON_GetArrayItem(array, i);
                 if (item)
@@ -841,7 +857,7 @@ public:
         if (array)
         {
             size = cJSON_GetArraySize(array);
-            for (i = 0; i < size; i++)
+            for (i = 0; i < size && i < MAX_TAG_COUNT; i++)
             {
                 item = cJSON_GetArrayItem(array, i);
                 if (item)
@@ -855,7 +871,7 @@ public:
         if (array)
         {
             size = cJSON_GetArraySize(array);
-            for (i = 0; i < size; i++)
+            for (i = 0; i < size && i < MAX_BOOKSRC_COUNT; i++)
             {
                 item = cJSON_GetArrayItem(array, i);
                 if (item)
@@ -909,7 +925,7 @@ public:
         cJSON* item;
 
         if (version)
-            wcscpy(data->version, Utf8ToUtf16(version->valuestring));
+            JsonCopy(data->version, version->valuestring);
         if (item_count)
             data->item_count = item_count->valueint;
         if (item_id)
@@ -967,7 +983,7 @@ public:
         if (chapter_page)
             data->chapter_page = chapter_page->valueint;
         if (ingore_version)
-            wcscpy(data->ingore_version, Utf8ToUtf16(ingore_version->valuestring));
+            JsonCopy(data->ingore_version, ingore_version->valuestring);
         if (checkver_time)
             data->checkver_time = *((u32*)&checkver_time->valueint);
 
@@ -1031,83 +1047,108 @@ public:
     }
 };
 
-class json_item_t
+static bool JsonInteger(cJSON* value, double low, double high)
 {
-    cJSON* id;
-    cJSON* index;
-    cJSON* file_name;
-    cJSON* mark_size;
-    cJSON* mark;
-    cJSON* is_new;
-public:
-    json_item_t(cJSON* parent, item_t* data)
-    {
-        cJSON* item;
-        int i;
+    return cJSON_IsNumber(value) && value->valuedouble >= low
+        && value->valuedouble <= high && floor(value->valuedouble) == value->valuedouble;
+}
 
-        id = cJSON_AddNumberToObject(parent, "id", data->id);
-        index = cJSON_AddNumberToObject(parent, "index", data->index);
-        file_name = cJSON_AddStringToObject(parent, "file_name", Utf16ToUtf8(data->file_name));
-        mark_size = cJSON_AddNumberToObject(parent, "mark_size", data->mark_size);
-        is_new = cJSON_AddNumberToObject(parent, "is_new", data->is_new);
-        
-        mark = cJSON_AddArrayToObject(parent, "mark");
-        for (i = 0; i < data->mark_size; i++)
-        {
-            item = cJSON_CreateNumber(data->mark[i]);
-            cJSON_AddItemToArray(mark, item);
-        }
-    }
-    json_item_t(cJSON* parent) // for json parser
+static bool ReadLibraryItem(cJSON* parent, item_t* data, int schema, int row)
+{
+    if (!cJSON_IsObject(parent)) return false;
+    cJSON* path = cJSON_GetObjectItem(parent, "file_name");
+    cJSON* pos = cJSON_GetObjectItem(parent, "index");
+    cJSON* marks = cJSON_GetObjectItem(parent, "mark");
+    cJSON* count = cJSON_GetObjectItem(parent, "mark_size");
+    cJSON* id = cJSON_GetObjectItem(parent, "id");
+    if (!cJSON_IsString(path) || !path->valuestring[0] || !JsonInteger(pos, 0, INT_MAX)
+        || !JsonInteger(count, 0, MAX_MARK_COUNT) || !cJSON_IsArray(marks)
+        || cJSON_GetArraySize(marks) != count->valueint) return false;
+    const wchar_t* full = Utf8ToUtf16(path->valuestring);
+    if (!full || wcslen(full) >= MAX_PATH) return false;
+    wcscpy(data->file_name, full);
+    data->id = schema == 1 ? row + 1 : (JsonInteger(id, 1, INT_MAX - 1) ? id->valueint : -1);
+    if (data->id < 1) return false;
+    data->index = pos->valueint;
+    data->mark_size = count->valueint;
+    for (int i = 0; i < data->mark_size; ++i)
     {
-        id = cJSON_GetObjectItem(parent, "id");
-        index = cJSON_GetObjectItem(parent, "index");
-        file_name = cJSON_GetObjectItem(parent, "file_name");
-        mark_size = cJSON_GetObjectItem(parent, "mark_size");
-        mark = cJSON_GetObjectItem(parent, "mark");
-        is_new = cJSON_GetObjectItem(parent, "is_new");
+        cJSON* mark = cJSON_GetArrayItem(marks, i);
+        if (!JsonInteger(mark, 0, INT_MAX)) return false;
+        data->mark[i] = mark->valueint;
     }
-    void GetData(item_t* data)
+    cJSON* value = cJSON_GetObjectItem(parent, "is_new");
+    data->is_new = value ? value->valueint != 0 : 0;
+    data->read_state = data->index > 0 ? 1 : 0;
+    if (schema >= 2)
     {
-        cJSON* item;
-        int i, size;
-        
-        if (id)
-            data->id = id->valueint;
-        if (index)
-            data->index = index->valueint;
-        if (file_name)
-            wcscpy(data->file_name, Utf8ToUtf16(file_name->valuestring));
-        if (mark_size)
-            data->mark_size = mark_size->valueint;
-        if (mark)
+        const char* fields[] = { "title", "author", "file_key" };
+        for (int i = 0; i < 3; ++i)
         {
-            size = cJSON_GetArraySize(mark);
-            if (size > MAX_MARK_COUNT)
-                size = MAX_MARK_COUNT;
-            for (i = 0; i < size; i++)
-            {
-                item = cJSON_GetArrayItem(mark, i);
-                if (item)
-                    data->mark[i] = item->valueint;
-            }
+            value = cJSON_GetObjectItem(parent, fields[i]);
+            if (value && !cJSON_IsString(value)) return false;
+            if (!value) continue;
+            full = Utf8ToUtf16(value->valuestring);
+            const size_t cap = i == 2 ? 64 : 256;
+            if (!full || wcslen(full) >= cap) return false;
+            wcscpy(i == 0 ? data->title : i == 1 ? data->author : data->file_key, full);
         }
-        if (is_new)
-            data->is_new = is_new->valueint;
+        value = cJSON_GetObjectItem(parent, "text_length");
+        if (value && !JsonInteger(value, 0, INT_MAX)) return false;
+        data->text_length = value ? value->valueint : 0;
+        value = cJSON_GetObjectItem(parent, "read_state");
+        if (value && !JsonInteger(value, 0, 2)) return false;
+        if (value) data->read_state = value->valueint;
+        value = cJSON_GetObjectItem(parent, "favorite");
+        if (value && !JsonInteger(value, 0, 1)) return false;
+        data->favorite = value ? value->valueint : 0;
+        value = cJSON_GetObjectItem(parent, "last_read");
+        if (value && !JsonInteger(value, 0, 9007199254740991.0)) return false;
+        data->last_read = value ? (u64)value->valuedouble : 0;
     }
-};
+    // Legacy order is evidence of order only, never of a reading timestamp.
+    if (!data->title[0])
+    {
+        const wchar_t* base = data->file_name;
+        for (const wchar_t* p = base; *p; ++p) if (*p == L'\\' || *p == L'/') base = p + 1;
+        wcsncpy(data->title, base, 255);
+        wchar_t* ext = wcsrchr(data->title, L'.');
+        if (ext) *ext = 0;
+    }
+    return true;
+}
+
+static void WriteLibraryItem(cJSON* parent, const item_t* data)
+{
+    cJSON_AddNumberToObject(parent, "id", data->id);
+    cJSON_AddNumberToObject(parent, "index", data->index);
+    cJSON_AddStringToObject(parent, "file_name", Utf16ToUtf8(data->file_name));
+    cJSON_AddNumberToObject(parent, "mark_size", data->mark_size);
+    cJSON_AddNumberToObject(parent, "is_new", data->is_new);
+    cJSON_AddStringToObject(parent, "title", Utf16ToUtf8(data->title));
+    cJSON_AddStringToObject(parent, "author", Utf16ToUtf8(data->author));
+    cJSON_AddStringToObject(parent, "file_key", Utf16ToUtf8(data->file_key));
+    cJSON_AddNumberToObject(parent, "text_length", data->text_length);
+    cJSON_AddNumberToObject(parent, "read_state", data->read_state);
+    cJSON_AddNumberToObject(parent, "favorite", data->favorite);
+    cJSON_AddNumberToObject(parent, "last_read", (double)data->last_read);
+    cJSON* marks = cJSON_AddArrayToObject(parent, "mark");
+    for (int i = 0; i < data->mark_size; ++i) cJSON_AddItemToArray(marks, cJSON_CreateNumber(data->mark[i]));
+}
 
 char* create_json(header_t *data)
 {
     cJSON* root, * header, * items, * item;
-    json_header_t* headerobj;
-    json_item_t* itemobj;
+    json_header_t* headerobj = NULL;
     item_t* itemdata;
     int i, offset;
     char* json = NULL;
 
+    if (!data) return NULL;
     root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "schema_version", CACHE_SCHEMA_VERSION);
     header = cJSON_CreateObject();
+    cJSON_AddNumberToObject(header, "next_item_id", data->next_item_id);
     cJSON_AddItemToObject(root, "header", header);
 
     headerobj = new json_header_t(header, data);
@@ -1120,9 +1161,8 @@ char* create_json(header_t *data)
             itemdata = (item_t*)((char*)data + offset);
 
             item = cJSON_CreateObject();
-            itemobj = new json_item_t(item, itemdata);
+            WriteLibraryItem(item, itemdata);
             cJSON_AddItemToArray(items, item);
-            delete itemobj;
         }
     }
     delete headerobj;
@@ -1138,75 +1178,79 @@ void create_json_free(char* json)
         free(json);
 }
 
-BOOL parser_json(const char* json, header_t* defhdr, void** data, int* size)
+BOOL parser_json(const char* json, header_t* defhdr, void** data, int* size, int* source_schema)
 {
-    cJSON* root, *header, *items, *item;
-    json_header_t* headerobj;
-    json_item_t* itemobj;
-    item_t* itemdata;
-    int i, offset;
-
-    *data = NULL;
-    *size = 0;
-    root = cJSON_Parse(json);
-    if (!root)
+    *data = NULL; *size = 0;
+    cJSON* root = cJSON_ParseWithOpts(json, NULL, TRUE);
+    if (!root) return FALSE;
+    cJSON* version = cJSON_GetObjectItem(root, "schema_version");
+    const int schema = version ? version->valueint : 1;
+    cJSON* header = cJSON_GetObjectItem(root, "header");
+    cJSON* items = cJSON_GetObjectItem(root, "items");
+    cJSON* count = cJSON_GetObjectItem(header, "item_count");
+    if (!cJSON_IsObject(root) || (version && !JsonInteger(version, 1, CACHE_SCHEMA_VERSION))
+        || !cJSON_IsObject(header) || !JsonInteger(count, 0, MAX_LIBRARY_ITEMS)
+        || (items && !cJSON_IsArray(items)) || cJSON_GetArraySize(items) != count->valueint)
     {
-        *size = sizeof(header_t);
-        *data = (header_t*)malloc(*size);
-        memcpy(*data, defhdr, *size);
-        return TRUE;
+        cJSON_Delete(root); return FALSE;
     }
-
-    // parser header
-    header = cJSON_GetObjectItem(root, "header");
-    if (!header)
+    // Settings also use fixed-size arrays. Reject counts that would drop records
+    // or exceed those bounds rather than normalizing a damaged cache to empty.
+    const char* arrays[] = { "keyset", "book_sources", "cust_colors" };
+    const int limits[] = { KI_MAXCOUNT, MAX_BOOKSRC_COUNT, MAX_CUST_COLOR_COUNT };
+    for (int i = 0; i < 3; ++i)
     {
-        *size = sizeof(header_t);
-        *data = (header_t*)malloc(*size);
-        memcpy(*data, defhdr, *size);
-        cJSON_Delete(root);
-        return TRUE;
+        cJSON* array = cJSON_GetObjectItem(header, arrays[i]);
+        if (array && (!cJSON_IsArray(array) || cJSON_GetArraySize(array) > limits[i]))
+        { cJSON_Delete(root); return FALSE; }
     }
-
-    headerobj = new json_header_t(header);
-    headerobj->GetData(defhdr);
-    delete headerobj;
-
-    // parser items
-    items = cJSON_GetObjectItem(root, "items");
-    if (!items || cJSON_GetArraySize(items) <= 0 || cJSON_GetArraySize(items) != defhdr->item_count)
+    cJSON* sourceCount = cJSON_GetObjectItem(header, "book_source_count");
+    if (sourceCount && (!JsonInteger(sourceCount, 0, MAX_BOOKSRC_COUNT)
+        || sourceCount->valueint != cJSON_GetArraySize(cJSON_GetObjectItem(header, "book_sources"))))
+    { cJSON_Delete(root); return FALSE; }
+    json_header_t headerobj(header);
+    headerobj.GetData(defhdr);
+    defhdr->cache_schema = CACHE_SCHEMA_VERSION;
+    defhdr->item_count = count->valueint;
+    defhdr->next_item_id = 1;
+    *size = sizeof(header_t) + sizeof(item_t) * defhdr->item_count;
+    *data = calloc(1, *size);
+    if (!*data) { *size = 0; cJSON_Delete(root); return FALSE; }
+    item_t* out = (item_t*)((char*)*data + sizeof(header_t));
+    std::set<int> ids;
+    bool valid = true;
+    for (int i = 0; i < defhdr->item_count && valid; ++i)
     {
-        defhdr->item_count = 0;
-        *size = sizeof(header_t);
-        *data = (header_t*)malloc(*size);
-        memcpy(*data, defhdr, *size);
-        cJSON_Delete(root);
-        return TRUE;
+        valid = ReadLibraryItem(cJSON_GetArrayItem(items, i), &out[i], schema, i)
+            && ids.insert(out[i].id).second;
+        if (valid && defhdr->next_item_id <= out[i].id) defhdr->next_item_id = out[i].id + 1;
     }
-
-    *size = sizeof(header_t) + (sizeof(item_t) * (defhdr->item_count));
-    *data = (header_t*)malloc(*size);
-    memset(*data, 0, *size);
-    memcpy(*data, defhdr, sizeof(header_t));
-
-    for (i = 0; i < defhdr->item_count; i++)
+    cJSON* next = cJSON_GetObjectItem(header, "next_item_id");
+    if (schema >= 2)
     {
-        offset = sizeof(header_t) + i * sizeof(item_t);
-        itemdata = (item_t*)((char*)(*data) + offset);
-        item = cJSON_GetArrayItem(items, i);
-        itemobj = new json_item_t(item);
-        itemobj->GetData(itemdata);
-        delete itemobj;
+        valid = valid && JsonInteger(next, defhdr->next_item_id, INT_MAX);
+        if (valid) defhdr->next_item_id = next->valueint;
+        if (defhdr->item_id != -1 && ids.find(defhdr->item_id) == ids.end()) valid = false;
     }
-    
+    else
+    {
+        // Old open_item moved the active book to the front but stored its old row.
+        defhdr->item_id = defhdr->item_count ? out[0].id : -1;
+    }
+    if (valid)
+    {
+        memcpy(*data, defhdr, sizeof(header_t));
+        if (source_schema) *source_schema = schema;
+    }
+    else { free(*data); *data = NULL; *size = 0; }
     cJSON_Delete(root);
-    return TRUE;
+    return valid ? TRUE : FALSE;
 }
 
 BOOL import_book_source(const char* json, book_source_t *bs, int* count)
 {
     cJSON* root, * book_sources, * item;
-    json_book_source_t* json_bs;
+    json_book_source_t* json_bs = NULL;
     int i;
 
     root = cJSON_Parse(json);
@@ -1241,7 +1285,7 @@ BOOL import_book_source(const char* json, book_source_t *bs, int* count)
 BOOL export_book_source(const book_source_t* bs, int count, char** json)
 {
     cJSON* root, * book_sources, * item;
-    json_book_source_t* json_bs;
+    json_book_source_t* json_bs = NULL;
     int i;
 
     *json = NULL;

@@ -15,6 +15,9 @@
 #include "WebDlg.h"
 #include "WebBook.h"
 #include "DisplaySet.h"
+#include "LibraryDlg.h"
+#include "ReadingState.h"
+#include <time.h>
 #if ENABLE_TAG
 #include "tagset.h"
 #endif
@@ -22,6 +25,7 @@
 #include <shlwapi.h>
 #include <CommDlg.h>
 #include <commctrl.h>
+#include <windowsx.h>
 #include <vector>
 #ifdef _DEBUG
 #include "dump.h"
@@ -55,6 +59,32 @@ INT_PTR CALLBACK    UpgradeProc(HWND, UINT, WPARAM, LPARAM);
 
 static void _free_resource(HWND hWnd);
 static void _update_data(HWND hWnd, BOOL keep_header, BOOL do_save);
+static void UpdateReaderLayout(HWND);
+static void SyncCurrentChapter(BOOL reveal = FALSE);
+static void ToggleToc(HWND);
+static void CloseToc(HWND);
+static void NavigatePosition(HWND, int);
+static BOOL BeginReadingJump();
+static void PrepareReadingJump(HWND);
+static void FinishReadingJump();
+static void NavigateHistory(HWND, BOOL);
+static BOOL ReaderShortcut(MSG*);
+static void RebindReadingCache();
+static LRESULT CALLBACK TocProc(HWND, UINT, WPARAM, LPARAM);
+static HWND _readerButtons[8] = {};
+static HFONT _readerUIFont = NULL;
+static WNDPROC _tocProc = NULL;
+static BOOL _tocFromFocus = FALSE;
+static BOOL _focusMode = FALSE, _tocVisible = FALSE, _syncingToc = FALSE, _routingWheel = FALSE;
+static RECT _readingRect = {};
+static ReadingGeometry _readingGeometry = {};
+static std::vector<HTREEITEM> _chapterItems;
+static int _tocCurrent = -1, _activeBookId = -1;
+static ReadingHistory _readingHistory, _replayHistory;
+static ReadingAnchor _jumpOrigin, _restoreAnchor;
+static BOOL _jumpPending = FALSE, _replaying = FALSE, _restorePending = FALSE;
+#define WM_TOC_ACTIVATE (WM_USER + 107)
+
 
 // Only containers supported by libmobi: MOBI/KF8 and PalmDoc text (not KFX,
 // Topaz, Print Replica or arbitrary Palm databases/programs).
@@ -167,9 +197,10 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
     // Main message loop:
     while (GetMessage(&msg, NULL, 0, 0))
     {
+        if (LibraryTranslateMessage(&msg) || ReaderShortcut(&msg)) continue;
         if (!_hFindDlg || !IsDialogMessage(_hFindDlg, &msg))
         {
-            if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+            if (!TranslateAccelerator(_hWnd, hAccelTable, &msg))
             {
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
@@ -381,8 +412,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         wmEvent = HIWORD(wParam);
         if (wmId >= IDM_OPEN_BEGIN && wmId <= IDM_OPEN_END)
         {
-            int item_id = wmId - IDM_OPEN_BEGIN;
-            OnOpenItem(hWnd, item_id, FALSE);
+            item_t* item = _Cache.get_item(wmId - IDM_OPEN_BEGIN);
+            if (item) OnOpenItem(hWnd, item->id, FALSE);
             ResumeAutoPage(hWnd);
             break;
         }
@@ -396,6 +427,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             break;
         case IDM_OPEN:
             OnOpenFile(hWnd, message, wParam, lParam);
+            break;
+        case IDM_LIBRARY:
+            OpenLibrary(hWnd, _Cache);
+            break;
+        case IDM_NAV_BACK:
+        case IDM_NAV_FORWARD:
+            NavigateHistory(hWnd, wmId == IDM_NAV_FORWARD);
+            SetFocus(hWnd);
+            break;
+        case IDM_READER_SEARCH:
+            OnSearch(hWnd, message, wParam, lParam);
+            break;
+        case IDM_FOCUS:
+            _focusMode = !_focusMode;
+            if (_focusMode) ShowWindow(_hTreeMark, SW_HIDE);
+            UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE); SetFocus(hWnd);
             break;
         case IDM_CLEAR:
             OnClearFileList(hWnd, message, wParam, lParam);
@@ -436,70 +483,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             OnRestoreDefault(hWnd, message, wParam, lParam);
             break;
         case IDM_VIEW:
-            if (IsWindowVisible(_hTreeView))
-            {
-                ShowWindow(_hTreeView, SW_HIDE);
-            }
-            else
-            {
-                if (_Book && !_Book->IsLoading())
-                {
-                    TVITEM tvi;
-                    HTREEITEM hti;
-
-                    if (_Book->GetChapters()->empty())
-                        break;
-                    int index = _Book->GetCurChapterIndex();
-                    if (index == -1)
-                    {
-                        break;
-                    }
-                    else if (index == 0)
-                    {
-                        hti = TreeView_GetRoot(_hTreeView);
-                        TreeView_EnsureVisible(_hTreeView, hti);
-                        TreeView_SelectItem(_hTreeView, hti);
-                    }
-                    else
-                    {
-                        hti = TreeView_GetRoot(_hTreeView);
-                        do 
-                        {
-                            tvi.mask       = TVIF_PARAM;
-                            tvi.hItem      = hti;
-                            TreeView_GetItem(_hTreeView, &tvi);
-                            if (tvi.lParam == index)
-                            {
-                                TreeView_EnsureVisible(_hTreeView, hti);
-                                TreeView_SelectItem(_hTreeView, hti);
-                                break;
-                            }
-                            hti = TreeView_GetNextSibling(_hTreeView, hti);
-                        } while (hti);
-                    }
-
-                    GetClientRectExceptStatusBar(hWnd, &rc);
-                    SetWindowPos(_hTreeView, NULL, rc.left, rc.top, rc.right-rc.left, rc.bottom-rc.top, SWP_SHOWWINDOW);
-                    SetFocus(_hTreeView);
-                }
-            }
+            ToggleToc(hWnd);
             break;
         case IDM_MARK:
-            if (IsWindowVisible(_hTreeMark))
+            if (IsWindowVisible(_hTreeMark)) ShowWindow(_hTreeMark, SW_HIDE);
+            else if (_Book && !_Book->IsLoading() && _item)
             {
-                ShowWindow(_hTreeMark, SW_HIDE);
-            }
-            else
-            {
-                if (_Book && !_Book->IsLoading() && _item)
+                if (_item->mark_size <= 0)
                 {
-                    if (_item->mark_size <= 0)
-                        break;
-                    GetClientRectExceptStatusBar(hWnd, &rc);
-                    SetWindowPos(_hTreeMark, NULL, rc.left, rc.top, rc.right-rc.left, rc.bottom-rc.top, SWP_SHOWWINDOW);
-                    SetFocus(_hTreeMark);
+                    MessageBox(hWnd, _T("当前没有书签。按 Ctrl+M 添加当前位置。"), _T("书签"), MB_OK | MB_ICONINFORMATION);
+                    break;
                 }
+                GetReadingRect(hWnd, &rc);
+                SetWindowPos(_hTreeMark, NULL, rc.left, rc.top, rc.right-rc.left, rc.bottom-rc.top, SWP_SHOWWINDOW);
+                SetFocus(_hTreeMark);
             }
+            UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE);
             break;
         default:
             ResumeAutoPage(hWnd);
@@ -511,24 +510,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         switch (((LPNMHDR)lParam)->code)
         {
         case TVN_SELCHANGED:
-            if (((LPNMHDR)lParam)->hwndFrom == _hTreeView)
+            if (((LPNMHDR)lParam)->hwndFrom == _hTreeView && !_syncingToc
+                && ((NMTREEVIEW*)lParam)->action == TVC_BYKEYBOARD)
+                PostMessage(hWnd, WM_TOC_ACTIVATE, 0, 0);
+            break;
+        case NM_CLICK:
+            if (((LPNMHDR)lParam)->hwndFrom == _hTreeView && !_syncingToc)
             {
-                if (IsWindowVisible(_hTreeView))
-                {
-                    HTREEITEM Selected;
-                    TVITEM item;
-                    Selected = TreeView_GetSelection(_hTreeView);
-                    if (Selected)
-                    {
-                        item.mask       = TVIF_PARAM;
-                        item.hItem      = Selected;
-                        TreeView_GetItem(_hTreeView, &item);
-                        if (_Book && !_Book->IsLoading())
-                            _Book->JumpChapter(hWnd, (int)item.lParam);
-                        //ShowWindow(_hTreeView, SW_HIDE);
-                        PostMessage(hWnd, WM_COMMAND, IDM_VIEW, NULL);
-                    }
-                }
+                TVHITTESTINFO hit = {}; GetCursorPos(&hit.pt); ScreenToClient(_hTreeView, &hit.pt);
+                if (TreeView_HitTest(_hTreeView, &hit) && (hit.flags & (TVHT_ONITEMLABEL | TVHT_ONITEMICON)))
+                    PostMessage(hWnd, WM_TOC_ACTIVATE, 0, 0);
             }
             break;
         case NM_RCLICK:
@@ -554,8 +545,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                         TreeView_GetItem(_hTreeMark, &item);
                         if (_Book && !_Book->IsLoading() && _item)
                         {
-                            _item->index = _item->mark[item.lParam];
-                            _Book->ReDraw(hWnd);
+                            if (item.lParam >= 0 && item.lParam < _item->mark_size)
+                                NavigatePosition(hWnd, _item->mark[item.lParam]);
                         }
                         //ShowWindow(_hTreeMark, SW_HIDE);
                         PostMessage(hWnd, WM_COMMAND, IDM_MARK, NULL);
@@ -601,33 +592,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         wmId = GetMenuItemID((HMENU)lParam, (int)wParam);
         if (wmId >= IDM_OPEN_BEGIN && wmId <= IDM_OPEN_END)
         {
-            int item_id = wmId - IDM_OPEN_BEGIN;
-            if (IDYES == MessageBoxFmt_(hWnd, IDS_WARN, MB_ICONINFORMATION | MB_YESNO, IDS_DELETE_FILE_CFM, _Cache.get_item(item_id)->file_name))
-            {
-                _Cache.delete_item(item_id);
-                OnUpdateMenu(hWnd);
-                if (item_id == 0 && _Book)
-                {
-                    // open the last file
-                    if (_header->item_count > 0)
-                    {
-                        item_t* item = _Cache.get_item(0);
-                        OnOpenBook(hWnd, item->file_name, TRUE);
-                    }
-                    else
-                    {
-                        if (_Book)
-                        {
-                            delete _Book;
-                            _Book = NULL;
-                        }
-                        PostMessage(hWnd, WM_UPDATE_CHAPTERS, 0, NULL);
-                        Invalidate(hWnd, TRUE, FALSE);
-                    }
-                }
-                break;
-            }
-            break;
+            item_t* item = _Cache.get_item(wmId - IDM_OPEN_BEGIN);
+            if (item && IDYES == MessageBoxFmt_(hWnd, IDS_WARN, MB_ICONINFORMATION | MB_YESNO, IDS_DELETE_FILE_CFM, item->file_name))
+                RemoveLibraryBook(item->id);
         }
         break;
     case WM_CREATE:
@@ -697,17 +664,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             else
             {
+                GetReadingRect(hWnd, &rc);
+                if (!PtInRect(&rc, pt)) return HTCLIENT;
                 if (_header->page_mode == 2)
                 {
-                    rc.left = rc.right/3;
-                    rc.right = rc.right/3 * 2;
+                    int third = (rc.right - rc.left) / 3;
+                    rc.right = rc.left + third * 2;
+                    rc.left += third;
                     if (PtInRect(&rc, pt))
                         hit = HTCAPTION;
                 }
                 else
                 {
                     caption_h = GetWidthForDpi(60);
-                    rc.bottom = rc.bottom/2 > caption_h ? caption_h : rc.bottom/2;
+                    rc.bottom = rc.top + (std::min)((int)(rc.bottom - rc.top) / 2, caption_h);
                     if (PtInRect(&rc, pt))
                         hit = HTCAPTION;
                 }
@@ -797,6 +767,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         KS_HotKeyProc(hWnd, message, wParam, lParam);
         break;
     case WM_LBUTTONDOWN:
+        pt.x = GET_X_LPARAM(lParam); pt.y = GET_Y_LPARAM(lParam);
+        if (!PtInRect(&_readingRect, pt)) break;
+        SetFocus(hWnd);
+        if (_tocVisible && _readingGeometry.drawer)
+        { CloseToc(hWnd); break; }
         if ((wParam & MK_LBUTTON) && (wParam & MK_RBUTTON) && _header->disable_lrhide == 0)
         {
             ShowHideWindow(hWnd);
@@ -810,16 +785,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         {
             GetCursorPos(&pt);
             ScreenToClient(hWnd, &pt);
-            GetClientRectExceptStatusBar(hWnd, &rc);
-            rc.left = rc.right/3 * 2;
+            GetReadingRect(hWnd, &rc);
+            int origin = rc.left;
+            int third = (rc.right - rc.left) / 3;
+            rc.left = origin + third * 2;
             if (PtInRect(&rc, pt))
             {
                 OnPageDown(hWnd, message, wParam, lParam);
             }
             else
             {
-                rc.left = 0;
-                rc.right = rc.right/3;
+                rc.left = origin;
+                rc.right = origin + third;
                 if (PtInRect(&rc, pt))
                 {
                     OnPageUp(hWnd, message, wParam, lParam);
@@ -828,6 +805,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_RBUTTONDOWN:
+        pt.x = GET_X_LPARAM(lParam); pt.y = GET_Y_LPARAM(lParam);
+        if (!PtInRect(&_readingRect, pt)) break;
+        SetFocus(hWnd);
+        if (_tocVisible && _readingGeometry.drawer)
+        { CloseToc(hWnd); break; }
         if ((wParam & MK_LBUTTON) && (wParam & MK_RBUTTON) && _header->disable_lrhide == 0)
         {
             ShowHideWindow(hWnd);
@@ -862,16 +844,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 break;
             }
         }
-        if (IsWindowVisible(_hTreeView))
-        {
-            ShowWindow(_hTreeView, SW_HIDE);
-            GetCursorPos(&pt);
-            GetMenuItemRect(hWnd, GetMenu(hWnd), 1, &rc);
-            if (PtInRect(&rc, pt))
-            {
-                break;
-            }
-        }
         if (IsWindowVisible(_hTreeMark))
         {
             ShowWindow(_hTreeMark, SW_HIDE);
@@ -889,16 +861,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ShowHideWindow(hWnd);
             break;
         }
-        if (IsWindowVisible(_hTreeView))
-        {
-            ShowWindow(_hTreeView, SW_HIDE);
-            GetCursorPos(&pt);
-            GetMenuItemRect(hWnd, GetMenu(hWnd), 1, &rc);
-            if (PtInRect(&rc, pt))
-            {
-                break;
-            }
-        }
         if (IsWindowVisible(_hTreeMark))
         {
             ShowWindow(_hTreeMark, SW_HIDE);
@@ -915,16 +877,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             const BYTE MIN_ALPHA = 0x01;
             const BYTE MAX_ALPHA = 0xff;
             const BYTE UNIT_STEP = 0x05;
-            if (IsWindowVisible(_hTreeView))
+            if (_routingWheel) return 0;
+            POINT wheel = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            HWND trees[] = { _hTreeView, _hTreeMark };
+            for (int i = 0; i < 2; ++i)
             {
-                SetFocus(_hTreeView);
-                break;
+                RECT bounds; GetWindowRect(trees[i], &bounds);
+                if (IsWindowVisible(trees[i]) && PtInRect(&bounds, wheel))
+                {
+                    _routingWheel = TRUE;
+                    SendMessage(trees[i], message, wParam, lParam);
+                    _routingWheel = FALSE;
+                    return 0;
+                }
             }
-            if (IsWindowVisible(_hTreeMark))
-            {
-                SetFocus(_hTreeMark);
-                break;
-            }
+            ScreenToClient(hWnd, &wheel);
+            if (!PtInRect(&_readingRect, wheel)) return 0;
             if (GET_WHEEL_DELTA_WPARAM(wParam) > 0)
             {
                 if (GetAsyncKeyState(VK_CONTROL) & 0x8000)
@@ -1036,6 +1004,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             break;
         }
         break;
+    case WM_TOC_ACTIVATE:
+        if (_tocVisible && !_syncingToc && _Book && !_Book->IsLoading())
+        {
+            TVITEM item = {}; item.hItem = TreeView_GetSelection(_hTreeView); item.mask = TVIF_PARAM;
+            if (item.hItem && TreeView_GetItem(_hTreeView, &item) && BeginReadingJump())
+            { _Book->JumpChapter(hWnd, (int)item.lParam); _Book->ResetLayout(); }
+        }
+        break;
     case WM_UPDATE_CHAPTERS:
         OnUpdateChapters(hWnd);
         OnUpdateBookMark(hWnd);
@@ -1141,6 +1117,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             SendMessage(_hTreeMark, TVM_SETITEMHEIGHT, theMetrics.iMenuHeight, NULL);
             DpiChanged(hWnd, &_header->font, &_header->placement.rcNormalPosition, wParam, (RECT*)lParam);
             DpiChanged(hWnd, &_header->font, &_header->fs_placement.rcNormalPosition, wParam, (RECT*)lParam);
+            HFONT previousFont = _readerUIFont;
+            theMetrics.lfMessageFont.lfHeight = -MulDiv(9, LOWORD(wParam), 72);
+            theMetrics.lfMessageFont.lfWidth = 0;
+            _readerUIFont = CreateFontIndirect(&theMetrics.lfMessageFont);
+            for (int i = 0; i < 8; ++i) SendMessage(_readerButtons[i], WM_SETFONT, (WPARAM)_readerUIFont, TRUE);
+            if (previousFont) DeleteObject(previousFont);
+            UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE);
         }
         break;
     default:
@@ -1790,10 +1773,7 @@ INT_PTR CALLBACK JumpProgress(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPa
                     }
                     if (_Book)
                     {
-                        _item->index = (int)(progress * _Book->GetTextLength() / 100);
-                        if (_item->index == _Book->GetTextLength())
-                            _item->index--;
-                        _Book->ReDraw(GetParent(hDlg));
+                        NavigatePosition(GetParent(hDlg), (int)(progress * _Book->GetTextLength() / 100));
                         Save(GetParent(hDlg));
                     }
                 }
@@ -1849,6 +1829,276 @@ INT_PTR CALLBACK UpgradeProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPar
 }
 #endif
 
+BOOL LibraryCanAcceptEntries()
+{
+    return IsWindowEnabled(_hWnd) && (!_Book || !_Book->IsLoading()) && !EC_IsEditMode();
+}
+
+BOOL IsLibraryBookFile(const TCHAR* path)
+{
+    return IsSupportedBookExtension(PathFindExtension(path));
+}
+
+static void RebindReadingCache()
+{
+    _header = _Cache.get_header();
+    _item = _Cache.get_by_id(_activeBookId);
+    if (_Book)
+    {
+        _Book->Rebind(_item ? &_item->index : NULL, _header);
+        if (!_Book->IsLoading())
+        {
+            _Book->SetChapterRule(&_header->chapter_rule);
+            if (_item) _Book->SetFileName(_item->file_name);
+        }
+    }
+}
+
+void ImportLibraryEntries(const std::vector<item_t>& entries)
+{
+    for (size_t i = 0; i < entries.size(); ++i)
+    {
+        const item_t& entry = entries[i];
+        item_t* item = _Cache.new_item(entry.file_name, entry.file_key);
+        if (!item) continue;
+        // A renamed original keeps its file identity and all reading data.
+        if (entry.file_key[0] && _tcscmp(item->file_key, entry.file_key) == 0
+            && _tcsicmp(item->file_name, entry.file_name) != 0)
+        {
+            int id = item->id;
+            _Cache.relink_item(id, entry.file_name, entry.file_key);
+            item = _Cache.get_by_id(id);
+        }
+        if (entry.title[0]) _tcscpy(item->title, entry.title);
+        if (entry.author[0]) _tcscpy(item->author, entry.author);
+    }
+    RebindReadingCache();
+}
+
+void OpenLibraryBook(int id) { OnOpenItem(_hWnd, id, FALSE); }
+void SaveLibrary() { if (_hWnd) { RebindReadingCache(); _update_data(_hWnd, TRUE, TRUE); OnUpdateMenu(_hWnd); } }
+
+BOOL RemoveLibraryBook(int id)
+{
+    if (id == _activeBookId)
+    {
+        StopAutoPage(_hWnd); StopLoadingImage(_hWnd);
+        delete _Book; _Book = NULL;
+        _item = NULL; _activeBookId = -1;
+        _readingHistory.Clear(); _jumpPending = _restorePending = FALSE;
+    }
+    if (!_Cache.delete_item(id)) return FALSE;
+    RebindReadingCache();
+    OnUpdateChapters(_hWnd); OnUpdateBookMark(_hWnd);
+    SaveLibrary(); LibraryChanged(); UpdateTitle(_hWnd); Invalidate(_hWnd, TRUE, FALSE);
+    return TRUE;
+}
+
+BOOL RelinkLibraryBook(int id, const TCHAR* path, const TCHAR* key)
+{
+    DWORD attrs = GetFileAttributes(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) return FALSE;
+    item_t* duplicate = _Cache.find_item(path, key);
+    bool reopen = _activeBookId == id || (duplicate && duplicate->id == _activeBookId);
+    if (!_Cache.relink_item(id, path, key)) return FALSE;
+    if (reopen)
+    {
+        // The selected identity survives merging; avoid any stale pointer into a shifted row.
+        _activeBookId = id;
+        RebindReadingCache();
+        OnOpenBook(_hWnd, _Cache.get_by_id(id)->file_name, TRUE);
+    }
+    else RebindReadingCache();
+    SaveLibrary(); LibraryChanged();
+    return TRUE;
+}
+
+static ReadingAnchor CurrentReadingAnchor()
+{
+    if (!_item || !_Book) return ReadingAnchor();
+    bool relative = _Book->GetBookType() == book_online || _Book->GetBookType() == book_web;
+    int chapter = _Book->GetCurChapterIndex();
+    int offset = _item->index;
+    if (relative && chapter >= 0 && chapter < (int)_Book->GetChapters()->size())
+        offset -= (*_Book->GetChapters())[chapter].index;
+    return ReadingAnchor(_item->id, chapter, (std::max)(0, offset), relative);
+}
+
+static BOOL BeginReadingJump()
+{
+    if (!_item || !_Book || _Book->IsLoading() || EC_IsEditMode()) return FALSE;
+    FinishReadingJump();
+    _jumpOrigin = CurrentReadingAnchor(); _jumpPending = TRUE;
+    _replaying = _restorePending = FALSE;
+    return TRUE;
+}
+
+static void NavigatePosition(HWND hWnd, int position)
+{
+    if (!BeginReadingJump()) return;
+    _Book->SetReadingPosition(position);
+    _Book->ReDraw(hWnd);
+}
+
+static void NavigateHistory(HWND hWnd, BOOL forward)
+{
+    if (!_item || !_Book || _Book->IsLoading() || EC_IsEditMode()) return;
+    FinishReadingJump();
+    _replayHistory = _readingHistory;
+    ReadingAnchor target;
+    if (!(forward ? _replayHistory.Forward(CurrentReadingAnchor(), target)
+        : _replayHistory.Back(CurrentReadingAnchor(), target))) return;
+    if (target.book != _item->id) return;
+    _restoreAnchor = target; _restorePending = _replaying = _jumpPending = TRUE;
+    if (target.relative && target.chapter != _Book->GetCurChapterIndex())
+        _Book->JumpChapter(hWnd, target.chapter);
+    else
+    {
+        PrepareReadingJump(hWnd);
+        _Book->ReDraw(hWnd);
+    }
+}
+
+static void PrepareReadingJump(HWND hWnd)
+{
+    if (!_restorePending || !_Book || !_item || _Book->IsLoading()) return;
+    int position = _restoreAnchor.offset;
+    if (_restoreAnchor.relative)
+    {
+        int chapter = _Book->GetCurChapterIndex();
+        if (chapter != _restoreAnchor.chapter || chapter < 0 || chapter >= (int)_Book->GetChapters()->size())
+        {
+            // Failed asynchronous chapter fetch: keep both history stacks untouched.
+            _restorePending = _jumpPending = _replaying = FALSE;
+            return;
+        }
+        position += (*_Book->GetChapters())[chapter].index;
+    }
+    _Book->SetReadingPosition(position);
+    _restorePending = FALSE;
+}
+
+static void FinishReadingJump()
+{
+    if (!_jumpPending || !_Book || !_item || _Book->IsLoading() || _restorePending) return;
+    ReadingAnchor current = CurrentReadingAnchor();
+    if (_replaying) _readingHistory = _replayHistory;
+    else _readingHistory.Record(_jumpOrigin, current);
+    _jumpPending = _replaying = FALSE;
+    EnableWindow(_readerButtons[5], _readingHistory.CanBack());
+    EnableWindow(_readerButtons[6], _readingHistory.CanForward());
+}
+
+BOOL GetReadingRect(HWND hWnd, RECT* rect)
+{
+    *rect = _readingRect;
+    return TRUE;
+}
+
+static void UpdateReaderLayout(HWND hWnd)
+{
+    if (!_header || !IsWindow(_hTreeView)) return;
+    RECT client; GetClientRectExceptStatusBar(hWnd, &client);
+    bool chrome = !_focusMode;
+    bool toc = _tocVisible && !_focusMode;
+    UINT dpi = GetWindowDpiCompat(hWnd);
+    ReadingGeometry geometry = ComputeReadingGeometry(client.right, client.bottom, (int)dpi, chrome, toc);
+    RECT reading = { geometry.readingLeft, geometry.readingTop, geometry.readingRight, geometry.readingBottom };
+    if (!EqualRect(&_readingRect, &reading) && _Book) _Book->ResetLayout();
+    _readingRect = reading; _readingGeometry = geometry;
+    int rowHeight = MulDiv(28, dpi, 96);
+    int buttonWidth = geometry.columns > 0 ? client.right / geometry.columns : client.right;
+    for (int i = 0; i < 8; ++i)
+    {
+        ShowWindow(_readerButtons[i], chrome ? SW_SHOWNA : SW_HIDE);
+        if (chrome) SetWindowPos(_readerButtons[i], NULL, (i % geometry.columns) * buttonWidth,
+            (i / geometry.columns) * rowHeight, buttonWidth, rowHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    ShowWindow(_hTreeView, toc ? SW_SHOWNA : SW_HIDE);
+    if (toc) SetWindowPos(_hTreeView, HWND_TOP, 0, geometry.toolbarHeight, geometry.sidebarWidth,
+        (std::max)(1, (int)client.bottom - geometry.toolbarHeight), SWP_NOACTIVATE);
+    if (IsWindowVisible(_hTreeMark)) SetWindowPos(_hTreeMark, HWND_TOP, reading.left, reading.top,
+        (std::max)(1, (int)(reading.right - reading.left)), (std::max)(1, (int)(reading.bottom - reading.top)), SWP_NOACTIVATE);
+    // Native child controls cannot be composed by UpdateLayeredWindow. While visible,
+    // use the existing constant-alpha paint path; closing chrome restores per-pixel mode.
+    _WndInfo.bLayered = _WndInfo.status != ds_normal && !chrome && !toc && !IsWindowVisible(_hTreeMark);
+    for (int i = 0; i < 8; ++i) EnableWindow(_readerButtons[i], !EC_IsEditMode());
+    EnableWindow(_readerButtons[5], !EC_IsEditMode() && _readingHistory.CanBack());
+    EnableWindow(_readerButtons[6], !EC_IsEditMode() && _readingHistory.CanForward());
+}
+
+static void SyncCurrentChapter(BOOL reveal)
+{
+    if (!_Book || _Book->IsLoading()) return;
+    int current = _Book->GetCurChapterIndex();
+    if (current < 0 || current >= (int)_chapterItems.size()) return;
+    if (current == _tocCurrent && TreeView_GetSelection(_hTreeView) == _chapterItems[current] && !reveal) return;
+    HTREEITEM first = TreeView_GetFirstVisible(_hTreeView);
+    _syncingToc = TRUE;
+    TreeView_SelectItem(_hTreeView, _chapterItems[current]);
+    if (reveal) TreeView_EnsureVisible(_hTreeView, _chapterItems[current]);
+    else if (first) TreeView_Select(_hTreeView, first, TVGN_FIRSTVISIBLE);
+    _syncingToc = FALSE; _tocCurrent = current;
+}
+
+static void CloseToc(HWND hWnd)
+{
+    _tocVisible = FALSE;
+    if (_tocFromFocus) _focusMode = TRUE;
+    _tocFromFocus = FALSE;
+    UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE); SetFocus(hWnd);
+}
+
+static void ToggleToc(HWND hWnd)
+{
+    if (EC_IsEditMode()) return;
+    if (_tocVisible && !_focusMode) { CloseToc(hWnd); return; }
+    if (!_Book || _Book->IsLoading()) return;
+    if (_focusMode) { _tocFromFocus = TRUE; _focusMode = FALSE; }
+    _tocVisible = TRUE;
+    if (_tocVisible) ShowWindow(_hTreeMark, SW_HIDE);
+    UpdateReaderLayout(hWnd); Invalidate(hWnd, TRUE, FALSE);
+    if (_tocVisible) { SyncCurrentChapter(TRUE); SetFocus(_hTreeView); }
+    else SetFocus(hWnd);
+}
+
+static LRESULT CALLBACK TocProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == WM_KEYDOWN && wParam == VK_RETURN)
+    { PostMessage(GetParent(window), WM_TOC_ACTIVATE, 0, 0); return 0; }
+    if (message == WM_MOUSEWHEEL && !_routingWheel)
+    {
+        POINT point = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        RECT bounds; GetWindowRect(window, &bounds);
+        if (!PtInRect(&bounds, point)) return SendMessage(GetParent(window), message, wParam, lParam);
+    }
+    return CallWindowProc(_tocProc, window, message, wParam, lParam);
+}
+
+static BOOL ReaderShortcut(MSG* message)
+{
+    if (message->hwnd != _hWnd && !IsChild(_hWnd, message->hwnd)) return FALSE;
+    if (EC_IsEditMode() || (message->message != WM_KEYDOWN && message->message != WM_SYSKEYDOWN)) return FALSE;
+    bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    int command = 0;
+    if (control && message->wParam == 'L') command = IDM_LIBRARY;
+    else if (control && message->wParam == 'T') command = IDM_VIEW;
+    else if (alt && message->wParam == VK_LEFT) command = IDM_NAV_BACK;
+    else if (alt && message->wParam == VK_RIGHT) command = IDM_NAV_FORWARD;
+    else if (message->wParam == VK_F8) command = IDM_FOCUS;
+    else if (message->wParam == VK_ESCAPE && (IsWindowVisible(_hTreeView) || IsWindowVisible(_hTreeMark)))
+    {
+        if (IsWindowVisible(_hTreeMark)) ShowWindow(_hTreeMark, SW_HIDE);
+        else { CloseToc(_hWnd); return TRUE; }
+        UpdateReaderLayout(_hWnd); Invalidate(_hWnd, TRUE, FALSE); SetFocus(_hWnd);
+        return TRUE;
+    }
+    if (!command) return FALSE;
+    SendMessage(_hWnd, WM_COMMAND, command, 0);
+    return TRUE;
+}
+
 LRESULT OnCreate(HWND hWnd)
 {
     LPWSTR* argv;
@@ -1867,7 +2117,7 @@ LRESULT OnCreate(HWND hWnd)
     _uFindReplaceMsg = RegisterWindowMessage(FINDMSGSTRING);
     // create chapters tree view
     _hTreeView = CreateWindow(WC_TREEVIEW, _T("Tree View"), 
-        /*WS_VISIBLE | */WS_CHILD /*| WS_BORDER*/ | TVS_HASLINES | TVS_NOHSCROLL | TVS_NOTOOLTIPS | TVS_LINESATROOT,
+        /*WS_VISIBLE | */WS_CHILD /*| WS_BORDER*/ | TVS_HASLINES | TVS_NOHSCROLL | TVS_NOTOOLTIPS | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
         0, 0, 200, 300, hWnd, NULL, hInst, NULL);
     _hTreeMark = CreateWindow(WC_TREEVIEW, _T("Tree Mark"), 
         /*WS_VISIBLE | */WS_CHILD /*| WS_BORDER*/ | TVS_HASLINES | TVS_NOHSCROLL /*| TVS_NOTOOLTIPS*/ | TVS_LINESATROOT,
@@ -1875,6 +2125,23 @@ LRESULT OnCreate(HWND hWnd)
     //TreeView_SetBkColor(_hTreeView, GetSysColor(COLOR_MENU));
     //TreeView_SetBkColor(_hTreeMark, GetSysColor(COLOR_MENU));
     SetTreeviewFont();
+    _tocProc = (WNDPROC)SetWindowLongPtr(_hTreeView, GWLP_WNDPROC, (LONG_PTR)TocProc);
+    _focusMode = _WndInfo.status != ds_normal;
+    NONCLIENTMETRICS metrics = {}; metrics.cbSize = sizeof(metrics);
+    SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0);
+    metrics.lfMessageFont.lfHeight = -MulDiv(9, GetWindowDpiCompat(hWnd), 72);
+    metrics.lfMessageFont.lfWidth = 0;
+    _readerUIFont = CreateFontIndirect(&metrics.lfMessageFont);
+    const TCHAR* labels[] = { _T("书库"), _T("目录"), _T("查找"), _T("书签"), _T("显示"), _T("返回"), _T("前进"), _T("专注") };
+    const int commands[] = { IDM_LIBRARY, IDM_VIEW, IDM_READER_SEARCH, IDM_MARK, IDM_DISPLAY, IDM_NAV_BACK, IDM_NAV_FORWARD, IDM_FOCUS };
+    for (int i = 0; i < 8; ++i)
+    {
+        _readerButtons[i] = CreateWindow(_T("BUTTON"), labels[i], WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+            0, 0, 0, 0, hWnd, (HMENU)(INT_PTR)commands[i], hInst, NULL);
+        SendMessage(_readerButtons[i], WM_SETFONT, (WPARAM)_readerUIFont, TRUE);
+    }
+    UpdateReaderLayout(hWnd);
+
 
     RemoveMenus(hWnd, FALSE);
     OnUpdateMenu(hWnd);
@@ -1898,8 +2165,10 @@ LRESULT OnCreate(HWND hWnd)
         // open the last file
         if (_header->item_count > 0)
         {
-            item_t* item = _Cache.get_item(0);
-            OnOpenBook(hWnd, item->file_name, FALSE);
+            item_t* item = _Cache.get_by_id(_header->item_id);
+            if (!item) item = _Cache.get_item(0);
+            if (item && PathFileExists(item->file_name)) OnOpenBook(hWnd, item->file_name, FALSE);
+            else PostMessage(hWnd, WM_COMMAND, IDM_LIBRARY, 0);
         }
     }
 
@@ -1917,6 +2186,7 @@ LRESULT OnCreate(HWND hWnd)
         ShowWindow(_WndInfo.hStatusBar, SW_HIDE);
         SetMenu(hWnd, NULL);
     }
+    UpdateReaderLayout(hWnd);
     return 0;
 }
 
@@ -1957,9 +2227,10 @@ LRESULT OnUpdateMenu(HWND hWnd)
     }
     hFile = CreateMenu();
     LoadString(hInst, IDS_MENU_OPEN, buf, MAX_LOADSTRING);
+    AppendMenu(hFile, MF_STRING, IDM_LIBRARY, _T("本地书库\tCtrl+L"));
     AppendMenu(hFile, MF_STRING, IDM_OPEN, buf);
     AppendMenu(hFile, MF_SEPARATOR, 0, NULL);
-    for (int i=0; i<_header->item_count; i++)
+    for (int i=0; i<_header->item_count && i<40; i++)
     {
         item_t* item = _Cache.get_item(i);
         AppendMenu(hFile, MF_STRING, (UINT_PTR)menu_begin_id, item->file_name);
@@ -1987,42 +2258,15 @@ LRESULT OnUpdateMenu(HWND hWnd)
 
 LRESULT OnOpenItem(HWND hWnd, int item_id, BOOL forced)
 {
-    if (IsWindow(_hFindDlg))
-    {
-        DestroyWindow(_hFindDlg);
-        _hFindDlg = NULL;
-    }
-    if (!forced && _item && _item->id == item_id && _Book && !_Book->IsLoading())
-    {
-        return 0;
-    }
-
-    BOOL bNotExist = FALSE;
-    item_t* item = _Cache.get_item(item_id);
-    if (!item)
-    {
-        bNotExist = TRUE;
-    }
+    item_t* item = _Cache.get_by_id(item_id);
+    if (!item) return 0;
+    if (EC_IsEditMode()) EC_LeaveEditMode();
+    if (PathFileExists(item->file_name)) OnOpenBook(hWnd, item->file_name, forced);
     else
     {
-        if (PathFileExists(item->file_name))
-        {
-            OnOpenBook(hWnd, item->file_name, forced);
-        }
-        else
-        {
-            bNotExist = TRUE;
-        }
+        OpenLibrary(hWnd, _Cache);
+        MessageBox(hWnd, _T("原文件已失联，阅读进度和书签仍保留。请在书库中选中此书并重新关联。"), _T("文件失联"), MB_OK | MB_ICONINFORMATION);
     }
-
-    if (bNotExist)
-    {
-        _Cache.delete_item(item_id);
-        // update menu
-        OnUpdateMenu(hWnd);
-        return 0L;
-    }
-
     return 0;
 }
 
@@ -2043,7 +2287,11 @@ LRESULT OnClearFileList(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         delete _Book;
         _Book = NULL;
     }
+    CloseLibrary();
     _Cache.delete_all_item();
+    _item = NULL; _activeBookId = -1; _readingHistory.Clear();
+    _jumpPending = _restorePending = FALSE;
+    LibraryChanged();
     OnUpdateMenu(hWnd);
     PostMessage(hWnd, WM_UPDATE_CHAPTERS, 0, NULL);
     Invalidate(hWnd, TRUE, FALSE);
@@ -2095,7 +2343,7 @@ LRESULT OnRestoreDefault(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     if (lastrule != _header->chapter_rule.rule)
     {
         // reload book
-        OnOpenItem(hWnd, 0, TRUE);
+        OnOpenItem(hWnd, _activeBookId, TRUE);
     }
     else
     {
@@ -2146,7 +2394,25 @@ LRESULT OnPaint(HWND hWnd, HDC hdc)
 
     if (_Book && !_Book->IsLoading())
     {
-        _Book->DrawPage(hWnd, memdc, &rc, FALSE);
+        PrepareReadingJump(hWnd);
+        RECT reading; GetReadingRect(hWnd, &reading);
+        RECT page = { 0, 0, reading.right - reading.left, reading.bottom - reading.top };
+        if (page.right > 0 && page.bottom > 0)
+        {
+            int saved = SaveDC(memdc);
+            IntersectClipRect(memdc, reading.left, reading.top, reading.right, reading.bottom);
+            SetViewportOrgEx(memdc, reading.left, reading.top, NULL);
+            _Book->DrawPage(hWnd, memdc, &page, FALSE);
+            RestoreDC(memdc, saved);
+            FinishReadingJump();
+        }
+    }
+    if (!_Book && !(_loading && _loading->enable))
+    {
+        RECT empty = _readingRect; InflateRect(&empty, -12, -12);
+        SetBkMode(memdc, TRANSPARENT); SetTextColor(memdc, _header->font_color);
+        SelectObject(memdc, _readerUIFont);
+        DrawText(memdc, _T("从“书库”添加电子书，或直接打开原文件。\nCtrl+L 书库 · Ctrl+T 目录 · F8 专注"), -1, &empty, DT_CENTER | DT_WORDBREAK);
     }
     if (_loading && _loading->enable)
     {
@@ -2182,6 +2448,7 @@ LRESULT OnPaint(HWND hWnd, HDC hdc)
         delete g;
     UpdateProgess();
     UpdateTitle(hWnd);
+    SyncCurrentChapter();
     return 0;
 }
 
@@ -2213,7 +2480,9 @@ VOID OnDraw(HWND hWnd)
     if (_Book && !_Book->IsLoading())
     {
         hdc_text = CreateCompatibleDC(hdc_screen);
+        PrepareReadingJump(hWnd);
         _Book->DrawPage(hWnd, hdc_text, &rc, TRUE);
+        FinishReadingJump();
         is_blank = _Book->IsBlankPage();
     }
 
@@ -2295,6 +2564,7 @@ VOID OnDraw(HWND hWnd)
         delete g;
     UpdateProgess();
     UpdateTitle(hWnd);
+    SyncCurrentChapter();
     return;
 }
 
@@ -2344,11 +2614,9 @@ VOID Invalidate(HWND hWnd, BOOL bOnlyClient, BOOL bErase)
 
 LRESULT OnSize(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    if (_WndInfo.status == ds_borderless)
-    {
-        OnDraw(hWnd);
-    }
     SendMessage(_WndInfo.hStatusBar, message, wParam, lParam);
+    UpdateReaderLayout(hWnd);
+    Invalidate(hWnd, TRUE, FALSE);
     return 0;
 }
 
@@ -2457,6 +2725,8 @@ LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     _Book = pBook;
     
     SendMessage(hWnd, WM_SETREDRAW, TRUE, 0); // lock redraw
+    _focusMode = _WndInfo.status != ds_normal; _tocFromFocus = FALSE;
+    UpdateReaderLayout(hWnd);
     // repaint for alpha
     Invalidate(hWnd, FALSE, FALSE);
     return 0;
@@ -2522,6 +2792,8 @@ LRESULT OnFullScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     SendMessage(hWnd, WM_SETREDRAW, TRUE, 0); // lock redraw
+    _focusMode = _WndInfo.status != ds_normal; _tocFromFocus = FALSE;
+    UpdateReaderLayout(hWnd);
     // repaint for alpha
     Invalidate(hWnd, FALSE, FALSE);
 
@@ -2555,7 +2827,7 @@ LRESULT OnOpenFile(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     ofn.lpstrFile = szFileName; 
     ofn.nMaxFile = sizeof(szFileName)/sizeof(*szFileName);  
     ofn.nFilterIndex = 0;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
     BOOL bSel = GetOpenFileName(&ofn);
     if (!bSel)
     {
@@ -2660,6 +2932,7 @@ LRESULT OnEditMode(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
 
             EC_EnterEditMode(hInst, hWnd, &_header->font, text, readonly);
+            UpdateReaderLayout(hWnd);
 
             free(text);
         }
@@ -2706,9 +2979,10 @@ LRESULT OnLineDown(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 LRESULT OnChapterUp(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    if (_Book && !_Book->IsLoading())
+    if (BeginReadingJump())
     {
         _Book->JumpPrevChapter(hWnd);
+        _Book->ResetLayout();
         Save(hWnd);
     }
     return 0;
@@ -2716,9 +2990,10 @@ LRESULT OnChapterUp(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 LRESULT OnChapterDown(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    if (_Book && !_Book->IsLoading())
+    if (BeginReadingJump())
     {
         _Book->JumpNextChapter(hWnd);
+        _Book->ResetLayout();
         Save(hWnd);
     }
     return 0;
@@ -2808,24 +3083,23 @@ LRESULT OnFindText(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     if (message == _uFindReplaceMsg)
     {
-        // do search
-        if (!_Book)
-            return 0;
-        len = (int)_tcslen(szFindWhat);
         if (fr.Flags & FR_DIALOGTERM)
         {
             // close dlg
             DestroyWindow(_hFindDlg);
             _hFindDlg = NULL;
+            return 0;
         }
-        else if (fr.Flags & FR_DOWN) // back search
+        if (!_Book || !_item || _Book->IsLoading()) return 0;
+        len = (int)_tcslen(szFindWhat);
+        if (len <= 0) return 0;
+        if (fr.Flags & FR_DOWN) // back search
         {
             for (int i=_item->index+1; i<_Book->GetTextLength()-len+1; i++)
             {
                 if (0 == memcmp(szFindWhat, _Book->GetText()+i, len*sizeof(TCHAR)))
                 {
-                    _item->index = i;
-                    _Book->ReDraw(hWnd);
+                    NavigatePosition(hWnd, i);
                     Save(hWnd);
                     break;
                 }
@@ -2833,12 +3107,11 @@ LRESULT OnFindText(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         else // front search
         {
-            for (int i=_item->index-1; i>=0; i--)
+            for (int i=(std::min)(_item->index-1, _Book->GetTextLength()-len); i>=0; i--)
             {
                 if (0 == memcmp(szFindWhat, _Book->GetText()+i, len*sizeof(TCHAR)))
                 {
-                    _item->index = i;
-                    _Book->ReDraw(hWnd);
+                    NavigatePosition(hWnd, i);
                     Save(hWnd);
                     break;
                 }
@@ -2859,6 +3132,9 @@ LRESULT OnFindText(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             fr.Flags = FR_DOWN;
 
             _hFindDlg = FindText(&fr);
+            if (_hFindDlg && _Book)
+                SetWindowText(_hFindDlg, _Book->GetBookType() == book_web ? _T("查找（当前章节）") :
+                    _Book->GetBookType() == book_online ? _T("查找（已加载正文）") : _T("查找（本书全文）"));
         }
     }
 
@@ -2874,6 +3150,8 @@ LRESULT OnUpdateChapters(HWND hWnd)
     TVINSERTSTRUCT tvins = {0};
     HTREEITEM hPrev = (HTREEITEM)TVI_FIRST;
     
+    _syncingToc = TRUE;
+    _chapterItems.clear(); _tocCurrent = -1;
     TreeView_DeleteAllItems(_hTreeView);
     if (_Book)
     {
@@ -2891,9 +3169,12 @@ LRESULT OnUpdateChapters(HWND hWnd)
 
             // Add the item to the tree-view control. 
             hPrev = (HTREEITEM)SendMessage(_hTreeView, TVM_INSERTITEM, 0, (LPARAM)(LPTVINSERTSTRUCT)&tvins);
+            _chapterItems.push_back(hPrev);
         }
     }
 
+    _syncingToc = FALSE;
+    SyncCurrentChapter();
     return 0;
 }
 
@@ -2914,6 +3195,7 @@ LRESULT OnUpdateBookMark(HWND hWnd)
 
         for (i=0; i<_item->mark_size; i++)
         {
+            if (_item->mark[i] < 0 || _item->mark[i] >= _Book->GetTextLength()) continue;
             len = _item->mark[i] + (MAX_MARK_TEXT - 1) > _Book->GetTextLength() ? _Book->GetTextLength() - _item->mark[i] : (MAX_MARK_TEXT - 1);
             memcpy(szText, _Book->GetText()+_item->mark[i], sizeof(TCHAR)*len);
             szText[len] = 0;
@@ -2964,17 +3246,28 @@ LRESULT OnOpenBookResult(HWND hWnd, BOOL result)
     }
 
     // create new item
-    item = _Cache.find_item(_Book->GetFileName());
+    TCHAR key[64]; _Cache.file_key(_Book->GetFileName(), key);
+    item = _Cache.find_item(_Book->GetFileName(), key);
     if (NULL == item)
     {
-        item = _Cache.new_item(_Book->GetFileName());
+        item = _Cache.new_item(_Book->GetFileName(), key);
         _header = _Cache.get_header(); // after realloc the header address has been changed
     }
 
+    if (!item) { StopLoadingImage(hWnd); return FALSE; }
+    const int openedId = item->id;
+    _Cache.relink_item(openedId, _Book->GetFileName(), key);
     // open item
-    _item = _Cache.open_item(item->id);
+    _item = _Cache.open_item(openedId);
+    _activeBookId = openedId;
+    _readingHistory.Clear(); _jumpPending = _restorePending = FALSE;
+    _item->last_read = (u64)time(NULL);
+    _item->text_length = _Book->GetTextLength();
+    if (!_item->read_state) _item->read_state = 1;
+    LibraryChanged();
 
     // set param
+    _header = _Cache.get_header();
     _Book->Init(&_item->index, _header);
     _Book->SetChapterRule(&(_header->chapter_rule));
 
@@ -3197,6 +3490,7 @@ void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
     chkbook_arg_t* arg = NULL;
 #endif
 
+    if (IsWindow(_hFindDlg)) { DestroyWindow(_hFindDlg); _hFindDlg = NULL; }
     _tcscpy(szFileName, filename);
     ext = PathFindExtension(szFileName);
 
@@ -3218,13 +3512,17 @@ void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
             }
         }
     }
-    _item = NULL;
+    Save(hWnd);
+    _item = NULL; _activeBookId = -1;
+    _jumpPending = _restorePending = FALSE;
 
     if (_Book)
     {
         delete _Book;
         _Book = NULL;
     }
+
+    OnUpdateChapters(hWnd); OnUpdateBookMark(hWnd);
 
     if (_tcsicmp(ext, _T(".txt")) == 0)
     {
@@ -3324,20 +3622,7 @@ void OnOpenOlBook(HWND hWnd, void* olparam)
 
         DeleteFile(savepath);
 
-        // delete not exist items
-        for (i = 0; i < _header->item_count; i++)
-        {
-            item_t* item = _Cache.get_item(i);
-            if (_tcscmp(item->file_name, savepath) == 0)
-            {
-                _Cache.delete_item(i);
-                if (i == 0)
-                {
-                    _item = NULL;
-                }
-                break;
-            }
-        }
+        // Replacing an online descriptor keeps its stable library record and marks.
     }
 
     // generate ol_header_t
@@ -3391,22 +3676,11 @@ BOOL Init(void)
 {
     if (!_Cache.init())
     {
-        MessageBox_(NULL, IDS_INIT_CACHE_FAIL, IDS_ERROR, MB_OK);
+        MessageBox(NULL, _T("无法读取书库缓存。原 .cache.dat 已保留；请先备份当前文件，再检查同目录的 .cache.dat.bak 或 .cache.dat.v1.bak。损坏或较新版本的缓存不会被覆盖。"), _T("书库缓存读取失败"), MB_OK | MB_ICONERROR);
         return FALSE;
     }
 
     _header = _Cache.get_header();
-
-    // delete not exist items
-    for (int i=0; i<_header->item_count; i++)
-    {
-        item_t* item = _Cache.get_item(i);
-        if (!PathFileExists(item->file_name))
-        {
-            _Cache.delete_item(i);
-            i--;
-        }
-    }
 
 #ifdef ENABLE_NETWORK
     hapi_init();
@@ -3450,6 +3724,8 @@ void Exit(void)
 
 static void _free_resource(HWND hWnd)
 {
+    CloseLibrary();
+    if (_readerUIFont) { DeleteObject(_readerUIFont); _readerUIFont = NULL; }
     // stop loading
     StopLoadingImage(hWnd);
     if (_loading)
@@ -3517,10 +3793,7 @@ static void _update_data(HWND hWnd, BOOL keep_header, BOOL do_save)
     _header->exstyle = (DWORD)GetWindowLongPtr(hWnd, GWL_EXSTYLE);
 
     // save
-    if (do_save)
-    {
-        _Cache.save();
-    }    
+    BOOL saved = !do_save || _Cache.save();
 
     // restore
     if (keep_header)
@@ -3535,6 +3808,13 @@ static void _update_data(HWND hWnd, BOOL keep_header, BOOL do_save)
         }
 #endif
     }
+    static BOOL warned = FALSE;
+    if (!saved && !warned)
+    {
+        warned = TRUE;
+        MessageBox_(hWnd, IDS_SAVE_CACHE_FAIL, IDS_ERROR, MB_OK | MB_ICONERROR);
+    }
+    else if (saved && do_save) warned = FALSE;
 }
 
 void Save(HWND hWnd)
@@ -3546,6 +3826,13 @@ void Save(HWND hWnd)
 
 LRESULT OnSave(HWND hWnd)
 {
+    static ReadingAnchor observed;
+    if (_Book && _item && !_Book->IsLoading())
+    {
+        ReadingAnchor current = CurrentReadingAnchor();
+        if (!(current == observed)) { _item->last_read = (u64)time(NULL); observed = current; }
+    }
+    LibraryChanged();
 #if ENABLE_REALTIME_SAVE
     _update_data(hWnd, TRUE, TRUE);
 #endif
@@ -3568,6 +3855,9 @@ void UpdateProgess(void)
 
     if (_item && _Book && !_Book->IsLoading())
     {
+        _item->text_length = _Book->GetTextLength();
+        if (_Book->GetBookType() != book_online && _Book->GetBookType() != book_web && _item->index > 0 && _Book->IsLastPage())
+            _item->read_state = 2;
         dprog = (double)_Book->GetProgress();
         nprog = (int)(dprog * 100);
         dprog = (double)nprog / 100.0;
