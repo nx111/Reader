@@ -179,6 +179,7 @@
     <ClInclude Include="Scrollbar.h" />
     <ClInclude Include="ScrollbarModel.h" />
     <ClInclude Include="Theme.h" />
+    <ClInclude Include="TitleBarTheme.h" />
     <ClInclude Include="BookmarkActions.h" />
     <ClInclude Include="BookmarkExport.h" />
     <ClInclude Include="PdfBook.h" />
@@ -245,6 +246,7 @@
     <ClCompile Include="NavigationPane.cpp" />
     <ClCompile Include="Scrollbar.cpp" />
     <ClCompile Include="Theme.cpp" />
+    <ClCompile Include="TitleBarTheme.cpp" />
     <ClCompile Include="Reader.cpp" />
     <ClCompile Include="tagset.cpp" />
     <ClCompile Include="TextBook.cpp" />

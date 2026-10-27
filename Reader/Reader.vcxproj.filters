@@ -52,6 +52,7 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Theme.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="TitleBarTheme.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="BookmarkActions.h" />
     <ClInclude Include="BookmarkExport.h" />
     <ClInclude Include="PdfBook.h" />
@@ -144,6 +145,7 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Theme.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="TitleBarTheme.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Reader.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

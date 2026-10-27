@@ -255,3 +255,21 @@ python -m unittest -v \
 These are portable geometry, production pagination/paint bridge and source
 contract checks. They do not verify actual Windows font rendering, edit-control
 formatting or PDF pixels on screen.
+
+## Native title-bar theme (targeted)
+
+```sh
+python -m unittest discover -s tests -p test_titlebar_theme.py -v
+python tests/check_windows_syntax.py --units Theme TitleBarTheme
+python tests/check_windows_syntax.py --units Theme TitleBarTheme --network
+```
+
+The five checks compile the unchanged production `TitleBarTheme.cpp` against
+Win32 API substitutes. They cover repeated light/dark and captionless/restored
+mode changes, matching caption/text colors, high-contrast entry/exit and failed
+accessibility queries, missing system DLL/export, rejected color attributes,
+paired rollback, top-level-only application and theme/event/project wiring.
+Only the documented DWM export is resolved, from the system directory.
+The native code changes no client geometry, hit testing or opacity. These are
+API-contract and source-boundary checks, not Windows 10/11 GUI, DWM pixels,
+caption-button accessibility or DPI visual verification.

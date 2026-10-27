@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+UNITS = ("Reader", "Book", "Cache", "Jsondata", "LibraryDlg", "SearchDlg", "Page", "WebBook", "Editctrl",
+                     "Advset", "DPIAwareness", "EpubBook", "HtmlParser", "Theme", "TitleBarTheme", "Scrollbar", "NavigationPane", "BookmarkActions", "PdfEngine", "PdfBook", "DisplaySet", "Keyset", "OnlineDlg", "WebDlg", "BooksourceDlg", "tagset")
 
 
 def main():
@@ -20,6 +22,8 @@ def main():
     parser.add_argument("--compiler", default="x86_64-w64-mingw32-g++")
     parser.add_argument("--windows-include", type=Path)
     parser.add_argument("--network", action="store_true")
+    parser.add_argument("--units", nargs="+", choices=UNITS, default=UNITS,
+                        help="Limit checks to the directly changed translation units")
     args = parser.parse_args()
     compiler = shutil.which(args.compiler)
     if not compiler:
@@ -59,8 +63,7 @@ def main():
         if args.network:
             flags.append("-DENABLE_NETWORK")
         failed = False
-        for name in ("Reader", "Book", "Cache", "Jsondata", "LibraryDlg", "SearchDlg", "Page", "WebBook", "Editctrl",
-                     "Advset", "DPIAwareness", "EpubBook", "HtmlParser", "Theme", "Scrollbar", "NavigationPane", "BookmarkActions", "PdfEngine", "PdfBook", "DisplaySet", "Keyset", "OnlineDlg", "WebDlg", "BooksourceDlg", "tagset"):
+        for name in args.units:
             result = subprocess.run([compiler, *flags, str(source / (name + ".cpp"))],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             print(name + ": " + ("FAIL" if result.returncode else "PASS"), flush=True)

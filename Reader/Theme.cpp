@@ -1,4 +1,5 @@
 #include "Theme.h"
+#include "TitleBarTheme.h"
 #include "ReaderInteraction.h"
 #include "Scrollbar.h"
 #include "DrawReaderIcon.h"
@@ -20,6 +21,7 @@
 namespace {
 const UINT_PTR subclassId = 0x5254484d;
 ReaderPalette palette = MakeReaderPalette(0);
+int currentTheme = 0;
 ReaderColors reading = { 0xffffff, 0, 0, false };
 HBRUSH windowBrush = NULL, surfaceBrush = NULL, readingBrush = NULL;
 std::set<HWND> roots;
@@ -29,6 +31,8 @@ std::map<ULONG_PTR, std::unique_ptr<MenuData>> menus;
 bool ClassIs(const WindowData* d, const wchar_t* type) { return !_wcsicmp(d->type.c_str(), type); }
 void Attach(HWND, bool);
 LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
+void ApplyTitleBar(HWND window)
+{ ApplyNativeTitleBarTheme(window, MakeReaderPalette(currentTheme), currentTheme != 0); }
 
 void Fill(HDC dc, const RECT& rect, COLORREF color)
 { HBRUSH brush = CreateSolidBrush(color); FillRect(dc, &rect, brush); DeleteObject(brush); }
@@ -323,7 +327,7 @@ void Apply(HWND window, WindowData* data)
     if (ClassIs(data, TOOLTIPS_CLASS)) { SetWindowTheme(window, L"", L""); SendMessage(window, TTM_SETTIPBKCOLOR, palette.raised, 0); SendMessage(window, TTM_SETTIPTEXTCOLOR, palette.text, 0); }
     if (ClassIs(data, WC_BUTTON) || ClassIs(data, WC_COMBOBOX) || ClassIs(data, STATUSCLASSNAME) || ClassIs(data, WC_HEADER) || ClassIs(data, PROGRESS_CLASS)) SetWindowTheme(window, L"", L"");
     if (ClassIs(data, PROGRESS_CLASS)) { SendMessage(window, PBM_SETBKCOLOR, 0, palette.surface); SendMessage(window, PBM_SETBARCOLOR, 0, palette.accent); }
-    if (data->root) PrepareWindowMenu(window);
+    if (data->root) { PrepareWindowMenu(window); ApplyTitleBar(window); }
     InvalidateRect(window, NULL, FALSE);
 }
 BOOL CALLBACK AttachChild(HWND window, LPARAM) { Attach(window, false); return TRUE; }
@@ -344,6 +348,10 @@ void Attach(HWND window, bool root)
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR reference)
 {
     WindowData* data = (WindowData*)reference;
+    if (data->root && (message == WM_THEMECHANGED || message == WM_SETTINGCHANGE
+        || message == WM_SYSCOLORCHANGE || message == WM_DWMCOMPOSITIONCHANGED
+        || (message == WM_STYLECHANGED && wParam == static_cast<WPARAM>(GWL_STYLE))))
+        ApplyTitleBar(window);
     if(data->root && (message==WM_ACTIVATEAPP || message==WM_CANCELMODE || message==WM_SETTINGCHANGE))
         ReaderScrollbarsRefresh(window,message==WM_CANCELMODE || (message==WM_ACTIVATEAPP&&!wParam));
     if (message == WM_NCDESTROY)
@@ -509,6 +517,7 @@ ReaderColors ThemeReadingColors(const header_t* settings)
 }
 void ThemeConfigure(const header_t* settings)
 {
+    currentTheme = settings->ui_theme;
     palette = MakeReaderPalette(settings->ui_theme);
     HIGHCONTRAST high = {}; high.cbSize = sizeof(high);
     if (SystemParametersInfo(SPI_GETHIGHCONTRAST, sizeof(high), &high, 0) && (high.dwFlags & HCF_HIGHCONTRASTON))
