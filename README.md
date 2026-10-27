@@ -3,6 +3,8 @@ A lightweight Win32 text, EPUB, Mobipocket/Kindle, PDF and online file reader
 
 ## 本地书库与阅读导航
 
+当前交互：专注保留可退出的精简左栏，静置为真实桌面半透明；Ctrl＋鼠标滚轮在正文上调整字号，PDF 调整页面缩放。滚动条默认隐藏，移到对应边缘显示。以下旧版本记录中的 Ctrl 滚轮透明度操作已由当前交互替代。详见 [本轮实现与验证边界](doc/scrollbar-focus-zoom.md)。
+
 采用左侧图标＋文字导航，支持批量索引原文件、失联记录重新关联、搜索筛选排序、多选管理、搜索结果与高亮、书签章名／摘要／可选备注与本地导出、联动目录和返回／前进；保留旧进度和书签并备份迁移缓存。`Ctrl+L` 打开书库，`Ctrl+T` 切换目录，`F8` 专注。详见 [使用与迁移说明](doc/library-usability.md) 和 [左侧导航、轻量取舍及 PDF](doc/left-navigation-pdf.md)。
 
 ## 本地电子书格式支持

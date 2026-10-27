@@ -18,6 +18,7 @@ static int cancelled=0,endedEdit=0,closedPanel=0,leftNavigation=0,layouts=0,dirt
 struct Drag {bool value=false;bool Active() {return value;}} _splitterDrag;
 BOOL IsWindowVisible(HWND) {return marks;}void ShowWindow(HWND,int show) {marks=show!=SW_HIDE;}
 BOOL IsChild(HWND,HWND window) {return window==(HWND)2;}
+BOOL ReaderNavigationContains(HWND window) {return window==(HWND)4;}
 int GetKeyState(int key) {return (key==VK_CONTROL?control:alt)?0x8000:0;}
 int GetAsyncKeyState(int) {return escapeHeld?0x8000:0;}
 BOOL IsWindowEnabled(HWND) {return !modal;}BOOL EC_IsEditMode() {return editing;}
@@ -49,6 +50,7 @@ void EscapeRegression()
     assert(ReaderFocusEscape(&key)&&closedPanel==1&&_focusMode);KeyUp();
     assert(ReaderFocusEscape(&key)&&!_focusMode);KeyUp();
     key.hwnd=(HWND)9;SetReaderFocusMode(TRUE);assert(!ReaderFocusEscape(&key)&&_focusMode);
+    key.hwnd=(HWND)4;assert(ReaderFocusEscape(&key)&&!_focusMode);KeyUp();
 }
 void RestoreRegression()
 {
@@ -79,6 +81,16 @@ int main(int argc,char** argv)
             auto g=ComputeReadingGeometry(ReaderScale(width,dpi),ReaderScale(500,dpi),dpi,true,false,240,true);
             auto nav=ReaderNavigationLayout(ReaderScale(width,dpi),ReaderScale(500,dpi),dpi,true,false,true);
             assert(g.navigationWidth==ReaderScale(48,dpi)&&g.readingLeft==nav.width&&g.readingTop==0&&nav.compact);
+            assert(nav.headerHeight==0&&nav.viewportHeight+nav.footerHeight==ReaderScale(500,dpi));
+            auto normal=ReaderNavigationLayout(ReaderScale(width,dpi),ReaderScale(500,dpi),dpi,true,false);
+            assert(normal.headerHeight==ReaderScale(44,dpi));
+            if(normal.compact) assert(nav.viewportHeight==normal.viewportHeight+normal.headerHeight&&nav.footerTop==normal.footerTop);
+            for(int height:{0,20,76,120,280})
+            {
+                auto small=ReaderNavigationLayout(ReaderScale(width,dpi),ReaderScale(height,dpi),dpi,true,false,true);
+                assert(small.headerHeight==0&&small.viewportHeight+small.footerHeight==ReaderScale(height,dpi));
+                assert(small.scrollMaximum==(std::max)(0,small.contentHeight-small.viewportHeight));
+            }
             auto repeated=ComputeReadingGeometry(ReaderScale(width,dpi),ReaderScale(500,dpi),dpi,true,false,240,true);
             assert(g.readingLeft==repeated.readingLeft&&g.readingBottom==repeated.readingBottom);
         }
@@ -92,9 +104,9 @@ int main(int argc,char** argv)
     else if(action=="palette")
         for(int dark:{0,1})
         {
-            auto p=MakeReaderPalette(dark);auto idle=ReaderFocusPalette(p,p.surface,false),clear=ReaderFocusPalette(p,p.surface,true);
-            assert(idle.text!=p.text&&idle.window!=p.window);assert(clear.text==p.text&&clear.window==p.window);
-            assert(Contrast(idle.text,idle.window)>=4.5&&Contrast(idle.selectedText,idle.selected)>=3);
+            auto p=MakeReaderPalette(dark);auto idle=ReaderScrollbarColors(p,p.surface);
+            assert(idle.background==p.surface&&idle.thumb!=p.text&&idle.thumb!=idle.background);
+            assert(Contrast(idle.thumb,idle.background)<3&&Contrast(idle.hot,idle.background)<4);
             assert(ReaderBlendColor(p.text,p.window,255)==p.text&&ReaderBlendColor(p.text,p.window,0)==p.window);
         }
     else if(action=="padding")

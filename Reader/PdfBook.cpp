@@ -1,4 +1,5 @@
 #include "PdfBook.h"
+#include "Scrollbar.h"
 #include "DPIAwareness.h"
 #include "Theme.h"
 #include "resource.h"
@@ -185,12 +186,12 @@ void PdfBook::UpdateScrollbars(HWND viewport)
 {
     for (int bar : {SB_VERT,SB_HORZ})
     {
-        SCROLLINFO info={};info.cbSize=sizeof(info);info.fMask=SIF_RANGE|SIF_PAGE|SIF_POS;
+        SCROLLINFO info={};info.cbSize=sizeof(info);info.fMask=SIF_RANGE|SIF_PAGE|SIF_POS|SIF_DISABLENOSCROLL;
         info.nMax=(bar==SB_VERT?geometry.pageHeight:geometry.pageWidth)-1;
         info.nPage=bar==SB_VERT?geometry.height:geometry.width;
         info.nPos=(int)(std::min)((int64_t)(bar==SB_VERT?geometry.maxY:geometry.maxX),
             (int64_t)(bar==SB_VERT?geometry.pageHeight:geometry.pageWidth)*(bar==SB_VERT?y:x)/1000000);
         SetScrollInfo(viewport,bar,&info,TRUE);
-        ShowScrollBar(viewport,bar,(bar==SB_VERT?geometry.maxY:geometry.maxX)>0);
     }
+    ReaderScrollbarsUpdate(viewport);
 }

@@ -22,6 +22,7 @@
 #include "Theme.h"
 #include "NavigationPane.h"
 #include "ReaderInteraction.h"
+#include "Scrollbar.h"
 #include "BookmarkActions.h"
 #include "PdfBook.h"
 #include "GdiSurface.h"
@@ -79,6 +80,7 @@ static void NavigateHistory(HWND, BOOL);
 static BOOL ReaderShortcut(MSG*);
 static BOOL ReaderFocusEscape(MSG*);
 static void SetReaderFocusMode(BOOL);
+static void ZoomReaderText(HWND,int);
 static void NavigateBookmark(HWND, int);
 static void BookmarkAction(HWND, UINT, int);
 void InvalidateReadingText();
@@ -92,9 +94,17 @@ static WNDPROC _tocProc = NULL;
 static BOOL _panelFromFocus = FALSE;
 static ReaderFocusPanels _focusPanels;
 static BOOL _focusEscapeLatched = FALSE;
+static ReaderCtrlWheel _ctrlWheel;
 static HIMAGELIST _treePadding = NULL;
 static int _treePaddingWidth = 0;
 static BOOL _focusMode = FALSE, _tocVisible = FALSE, _syncingToc = FALSE, _routingWheel = FALSE;
+static BYTE ReaderBodyAlpha() {return (_focusMode || _panelFromFocus)?255:(_header->alpha < MIN_ALPHA_VALUE ? MIN_ALPHA_VALUE : _header->alpha);}
+static void ApplyReaderBodyAlpha(HWND window)
+{
+    BYTE alpha=ReaderBodyAlpha(),previous=0;DWORD flags=0;COLORREF key=0;
+    if(GetLayeredWindowAttributes(window,&key,&previous,&flags) && (flags&LWA_ALPHA) && previous==alpha) return;
+    SetLayeredWindowAttributes(window,0,alpha,LWA_ALPHA);
+}
 static RECT _readingRect = {};
 static ReadingGeometry _readingGeometry = {};
 static std::vector<HTREEITEM> _chapterItems;
@@ -365,6 +375,9 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
     while (GetMessage(&msg, NULL, 0, 0))
     {
         if(msg.message==WM_KEYUP && msg.wParam==VK_ESCAPE) _focusEscapeLatched=FALSE;
+        if((msg.message==WM_KEYUP || msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYUP) && msg.wParam==VK_CONTROL) _ctrlWheel.Reset();
+        if(msg.message==WM_MOUSEWHEEL || msg.message==WM_MOUSEHWHEEL)
+        {POINT point={GET_X_LPARAM(msg.lParam),GET_Y_LPARAM(msg.lParam)};HWND hit=WindowFromPoint(point);ScreenToClient(_hWnd,&point);if(hit!=_hReadingView || !PtInRect(&_readingRect,point) || _libraryVisible) _ctrlWheel.Reset();}
         if (ReaderSearchTranslate(&msg) || ReaderFocusEscape(&msg)) continue;
         if ((msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) && !EC_IsEditMode()
             && (msg.hwnd==_hWnd || msg.hwnd==_hReadingView || ReaderNavigationContains(msg.hwnd))
@@ -520,13 +533,13 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
    if (!_WndInfo.bLayered)
    {
-       SetLayeredWindowAttributes(hWnd, 0, _header->alpha < MIN_ALPHA_VALUE ? MIN_ALPHA_VALUE : _header->alpha, LWA_ALPHA);
+       ApplyReaderBodyAlpha(hWnd);
    }
 
    ShowSysTray(hWnd, _header->show_systray);
    ShowInTaskbar(hWnd, !_header->hide_taskbar);
 
-   if (_WndInfo.status != ds_normal)
+   if (_WndInfo.bLayered)
    {
        OnDraw(hWnd);
    }
@@ -582,11 +595,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (ReaderNavigationSystemMenu(wParam,lParam)) return 0;
         return DefWindowProc(hWnd,message,wParam,lParam);
     case WM_ACTIVATEAPP:
-        if (!wParam) { _focusEscapeLatched=FALSE; CancelReaderNavigation(); }
+        if (!wParam) { _focusEscapeLatched=FALSE; _ctrlWheel.Reset(); CancelReaderNavigation(); }
         RefreshReaderNavigationEmphasis();PostMessage(hWnd,WM_READER_NAVIGATION_REFRESH,0,0);
         return DefWindowProc(hWnd,message,wParam,lParam);
+    case WM_WINDOWPOSCHANGED:
+    case WM_ENABLE:
+        {LRESULT result=DefWindowProc(hWnd,message,wParam,lParam);FollowReaderNavigation();return result;}
     case WM_CANCELMODE:
-        CancelReaderNavigation(); CancelSplitter(hWnd); return 0;
+        _ctrlWheel.Reset();CancelReaderNavigation(); CancelSplitter(hWnd); return 0;
     case WM_READER_LIBRARY_VIEW:
         _libraryVisible = wParam != 0;
         if (_libraryVisible) PauseAutoPage(hWnd); else ResumeAutoPage(hWnd);
@@ -1084,11 +1100,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_MOUSEHWHEEL:
     case WM_MOUSEWHEEL:
         {
-            const BYTE MIN_ALPHA = 0x01;
             const BYTE MAX_ALPHA = 0xff;
             const BYTE UNIT_STEP = 0x05;
             if (_routingWheel) return 0;
-            if (ReaderNavigationWheel(message,wParam,lParam)) return 0;
+            if (ReaderNavigationWheel(message,wParam,lParam)) {_ctrlWheel.Reset();return 0;}
             POINT wheel = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             HWND trees[] = { _hTreeView, _hTreeMark };
             for (int i = 0; i < 2; ++i)
@@ -1096,90 +1111,47 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 RECT bounds; GetWindowRect(trees[i], &bounds);
                 if (IsWindowVisible(trees[i]) && PtInRect(&bounds, wheel))
                 {
-                    _routingWheel = TRUE;
+                    _ctrlWheel.Reset();_routingWheel = TRUE;
                     SendMessage(trees[i], message, wParam, lParam);
                     _routingWheel = FALSE;
                     return 0;
                 }
             }
+            bool readingPointer=WindowFromPoint(wheel)==_hReadingView;
             ScreenToClient(hWnd, &wheel);
-            if (!PtInRect(&_readingRect, wheel) || _libraryVisible) return 0;
+            if (!PtInRect(&_readingRect, wheel) || _libraryVisible) {_ctrlWheel.Reset();return 0;}
+            bool control=(GET_KEYSTATE_WPARAM(wParam)&MK_CONTROL)!=0;
+            if(message==WM_MOUSEWHEEL && control)
+            {
+                bool ready=readingPointer&&IsWindowEnabled(hWnd)&&_Book&&!_Book->IsLoading()&&!EC_IsEditMode();
+                int steps=_ctrlWheel.Feed(GET_WHEEL_DELTA_WPARAM(wParam),true,ready,GetCapture()!=nullptr,ready?_Book->GetOpenToken():0);
+                if(steps)
+                {
+                    if(_Book->GetBookType()==book_pdf) {((PdfBook*)_Book)->Zoom(hWnd,steps);Save(hWnd);}
+                    else ZoomReaderText(hWnd,steps);
+                }
+                return 0;
+            }
+            _ctrlWheel.Reset();
             if (_Book && !_Book->IsLoading() && _Book->GetBookType()==book_pdf)
             {
                 int delta=GET_WHEEL_DELTA_WPARAM(wParam);
-                if ((GetKeyState(VK_CONTROL)&0x8000) && message==WM_MOUSEWHEEL) ((PdfBook*)_Book)->Zoom(hWnd,delta>0?1:-1);
-                else if (message==WM_MOUSEHWHEEL || (GetKeyState(VK_SHIFT)&0x8000)) ((PdfBook*)_Book)->Scroll(hWnd,message==WM_MOUSEHWHEEL?delta:-delta,true);
+                if (message==WM_MOUSEHWHEEL || (GetKeyState(VK_SHIFT)&0x8000)) ((PdfBook*)_Book)->Scroll(hWnd,message==WM_MOUSEHWHEEL?delta:-delta,true);
                 else if(delta>0) _Book->LineUp(hWnd); else _Book->LineDown(hWnd);
                 Save(hWnd);return 0;
             }
             if (message == WM_MOUSEHWHEEL) return 0;
             if (GET_WHEEL_DELTA_WPARAM(wParam) > 0)
             {
-                if (GetAsyncKeyState(VK_CONTROL) & 0x8000)
-                {
-                    if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
-                    {
-                        _header->alpha = MAX_ALPHA;
-                    }
-                    else
-                    {
-                        if (_header->alpha < MAX_ALPHA - UNIT_STEP)
-                            _header->alpha += UNIT_STEP;
-                        else
-                            _header->alpha = MAX_ALPHA;
-                    }
-                    if (_WndInfo.bLayered)
-                        OnDraw(hWnd);
-                    else
-                        SetLayeredWindowAttributes(hWnd, 0, _header->alpha < MIN_ALPHA_VALUE ? MIN_ALPHA_VALUE : _header->alpha, LWA_ALPHA);
-                }
-                else if (GetAsyncKeyState(18) & 0x8000) // alt
-                {
-                    if (_textAlpha < MAX_ALPHA - UNIT_STEP)
-                        _textAlpha += UNIT_STEP;
-                    else
-                        _textAlpha = MAX_ALPHA;
-                    if (_WndInfo.bLayered)
-                        OnDraw(hWnd);
-                }
-                else
-                {
-                    OnLineUp(hWnd, message, wParam, lParam);
-                }
+                if (GetAsyncKeyState(VK_MENU) & 0x8000)
+                { _textAlpha=(std::min)((int)MAX_ALPHA,(int)_textAlpha+UNIT_STEP);if(_WndInfo.bLayered) OnDraw(hWnd); }
+                else OnLineUp(hWnd,message,wParam,lParam);
             }
-            else
+            else if(GET_WHEEL_DELTA_WPARAM(wParam) < 0)
             {
-                if (GetAsyncKeyState(VK_CONTROL) & 0x8000)
-                {
-                    if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
-                    {
-                        _header->alpha = MIN_ALPHA;
-                    }
-                    else
-                    {
-                        if (_header->alpha > MIN_ALPHA + UNIT_STEP)
-                            _header->alpha -= UNIT_STEP;
-                        else
-                            _header->alpha = MIN_ALPHA;
-                    }
-                    if (_WndInfo.bLayered)
-                        OnDraw(hWnd);
-                    else
-                        SetLayeredWindowAttributes(hWnd, 0, _header->alpha < MIN_ALPHA_VALUE ? MIN_ALPHA_VALUE : _header->alpha, LWA_ALPHA);
-                }
-                else if (GetAsyncKeyState(18) & 0x8000) // alt
-                {
-                    if (_textAlpha > 0x1f + UNIT_STEP)
-                        _textAlpha -= UNIT_STEP;
-                    else
-                        _textAlpha = 0x1f;
-                    if (_WndInfo.bLayered)
-                        OnDraw(hWnd);
-                }
-                else
-                {
-                    OnLineDown(hWnd, message, wParam, lParam);
-                }
+                if (GetAsyncKeyState(VK_MENU) & 0x8000)
+                { _textAlpha=(std::max)(0x1f,(int)_textAlpha-UNIT_STEP);if(_WndInfo.bLayered) OnDraw(hWnd); }
+                else OnLineDown(hWnd,message,wParam,lParam);
             }
         }
         break;
@@ -2443,6 +2415,7 @@ static void UpdateReaderLayout(HWND hWnd)
     if(panel && !geometry.drawer) PositionControl(_hSplitter,HWND_TOP,left+geometry.sidebarWidth,0,geometry.splitterWidth,(std::max)(1,(int)client.bottom));
     VisibleControl(_hSplitter,panel && !geometry.drawer);
     _WndInfo.bLayered=_WndInfo.status!=ds_normal && !chrome && !panel && !_libraryVisible && (!_Book || _Book->GetBookType()!=book_pdf);
+    if(!_WndInfo.bLayered) ApplyReaderBodyAlpha(hWnd);
     if(!_WndInfo.bLayered) PositionControl(_hReadingView,HWND_BOTTOM,reading.left,0,(std::max)(1,(int)(reading.right-reading.left)),(std::max)(1,(int)reading.bottom));
     VisibleControl(_hReadingView,!_WndInfo.bLayered && !_libraryVisible);
     LayoutLibraryView(hWnd,&reading,dpi,_libraryVisible); EC_UpdateReadingRect(&reading);
@@ -2562,7 +2535,7 @@ static void SetReaderFocusMode(BOOL focus)
 static BOOL ReaderFocusEscape(MSG* message)
 {
     if(message->wParam!=VK_ESCAPE) return FALSE;
-    if(message->hwnd!=_hWnd && !IsChild(_hWnd,message->hwnd)) return FALSE;
+    if(message->hwnd!=_hWnd && !IsChild(_hWnd,message->hwnd) && !ReaderNavigationContains(message->hwnd)) return FALSE;
     if(message->message==WM_KEYUP) { _focusEscapeLatched=FALSE;return FALSE; }
     if(message->message!=WM_KEYDOWN || (GetKeyState(VK_CONTROL)&0x8000) || (GetKeyState(VK_MENU)&0x8000)) return FALSE;
     if(_focusEscapeLatched) return TRUE; // Holding Esc must not exit focus and then hide the app.
@@ -2584,7 +2557,7 @@ static BOOL ReaderFocusEscape(MSG* message)
 
 static BOOL ReaderShortcut(MSG* message)
 {
-    if (message->hwnd != _hWnd && !IsChild(_hWnd, message->hwnd)) return FALSE;
+    if (message->hwnd != _hWnd && !IsChild(_hWnd, message->hwnd) && !ReaderNavigationContains(message->hwnd)) return FALSE;
     if (EC_IsEditMode() || (message->message != WM_KEYDOWN && message->message != WM_SYSKEYDOWN)) return FALSE;
     bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
@@ -2878,7 +2851,7 @@ LRESULT OnRestoreDefault(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     if (!_WndInfo.bLayered)
     {
-        SetLayeredWindowAttributes(hWnd, 0, _header->alpha < MIN_ALPHA_VALUE ? MIN_ALPHA_VALUE : _header->alpha, LWA_ALPHA);
+        ApplyReaderBodyAlpha(hWnd);
     }
 
     if (lastrule != _header->chapter_rule.rule)
@@ -3001,7 +2974,7 @@ VOID Invalidate(HWND hWnd, BOOL bOnlyClient, BOOL bErase)
     if (_WndInfo.bLayered) OnDraw(hWnd); // UpdateLayeredWindow submits a whole composed frame.
     else
     {
-        if (reset) SetLayeredWindowAttributes(hWnd, 0, _header->alpha < MIN_ALPHA_VALUE ? MIN_ALPHA_VALUE : _header->alpha, LWA_ALPHA);
+        if (reset) ApplyReaderBodyAlpha(hWnd);
         if (_hReadingView) InvalidateRect(_hReadingView, NULL, FALSE);
         if (!bOnlyClient) InvalidateRect(hWnd, NULL, FALSE);
     }
@@ -3410,46 +3383,27 @@ LRESULT OnChapterDown(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
+static void ZoomReaderText(HWND hWnd,int steps)
+{
+    if(!_header || !_Book || _Book->IsLoading() || EC_IsEditMode()) return;
+    int dpi=GetWindowDpiCompat(hWnd);if(dpi<=0) return;
+    int current=abs(MulDiv(_header->font.lfHeight,72,dpi));int next=ReaderFontPoints(current,steps);
+    if(next==current) return;
+    _header->font.lfHeight=-MulDiv(next,dpi,72);
+    _Book->ResetLayout(); // Reflow from the existing character index, never a jump.
+    _Book->ReDraw(hWnd);Save(hWnd);
+}
+
 LRESULT OnFontZoomIn(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (_Book && !_Book->IsLoading() && _Book->GetBookType()==book_pdf) {((PdfBook*)_Book)->Zoom(hWnd,1); Save(hWnd);return 0;}
-    //const int ZOOM_MIN = 1;
-    const int ZOOM_MAX = 72;
-    int PointSize;
-
-    if (_header && _Book && !_Book->IsLoading())
-    {
-        PointSize = abs(MulDiv(_header->font.lfHeight, 72, GetDeviceCaps(GetDC(NULL), LOGPIXELSY)));
-        if (PointSize < ZOOM_MAX)
-        {
-            PointSize++;
-            _header->font.lfHeight = -MulDiv(PointSize, GetDeviceCaps(GetDC(NULL), LOGPIXELSY), 72);
-            _Book->ReDraw(hWnd);
-            Save(hWnd);
-        }
-    }
-    return 0;
+    ZoomReaderText(hWnd,1);return 0;
 }
 
 LRESULT OnFontZoomOut(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (_Book && !_Book->IsLoading() && _Book->GetBookType()==book_pdf) {((PdfBook*)_Book)->Zoom(hWnd,-1); Save(hWnd);return 0;}
-    const int ZOOM_MIN = 1;
-    //const int ZOOM_MAX = 72;
-    int PointSize;
-
-    if (_header && _Book && !_Book->IsLoading())
-    {
-        PointSize = abs(MulDiv(_header->font.lfHeight, 72, GetDeviceCaps(GetDC(NULL), LOGPIXELSY)));
-        if (PointSize > ZOOM_MIN)
-        {
-            PointSize--;
-            _header->font.lfHeight = -MulDiv(PointSize, GetDeviceCaps(GetDC(NULL), LOGPIXELSY), 72);
-            _Book->ReDraw(hWnd);
-            Save(hWnd);
-        }
-    }
-    return 0;
+    ZoomReaderText(hWnd,-1);return 0;
 }
 
 LRESULT OnDropFiles(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -3621,6 +3575,7 @@ LRESULT OnOpenBookResult(HWND hWnd, BOOL result)
     if (_Book->GetBookType()==book_pdf)
     {
         ((PdfBook*)_Book)->RestoreView(_item);
+        ShowScrollBar(_hReadingView,SB_BOTH,TRUE); // Stable PDF metrics; empty tracks paint as background.
         std::wstring title=((PdfBook*)_Book)->Title(),author=((PdfBook*)_Book)->Author();
         if(!title.empty()) lstrcpyn(_item->title,title.c_str(),256);
         if(!author.empty()) lstrcpyn(_item->author,author.c_str(),256);
@@ -3719,7 +3674,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
             if(wParam==WM_KEYUP) _focusEscapeLatched=FALSE;
             else if(wParam==WM_KEYDOWN)
             {
-                if(GetForegroundWindow()!=_hWnd || ReaderNavigationTracking()) return CallNextHookEx(_hKeyboardHook,nCode,wParam,lParam);
+                if(!ReaderNavigationForeground() || ReaderNavigationTracking()) return CallNextHookEx(_hKeyboardHook,nCode,wParam,lParam);
                 MSG escape={};escape.hwnd=_hWnd;escape.message=WM_KEYDOWN;escape.wParam=VK_ESCAPE;if(ReaderFocusEscape(&escape)) return 1; }
         }
         if (wParam == WM_KEYDOWN)
@@ -3849,6 +3804,7 @@ BOOL IsVaildFile(HWND hWnd, TCHAR *filename, int *p_size)
 
 void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
 {
+    _ctrlWheel.Reset();
     item_t *item = NULL;
     TCHAR *ext = NULL;
     int size = 0;
@@ -3883,6 +3839,7 @@ void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
     Save(hWnd);
     _item = NULL; _activeBookId = -1;
     _jumpPending = _restorePending = FALSE;
+    ReaderScrollbarsRefresh(hWnd,TRUE);ShowScrollBar(_hReadingView,SB_BOTH,FALSE);
 
     if (_Book)
     {

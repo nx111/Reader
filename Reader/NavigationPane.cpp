@@ -1,6 +1,8 @@
 #include "NavigationPane.h"
 #include "NavigationLayout.h"
 #include "ReaderInteraction.h"
+#include "Scrollbar.h"
+#include "FocusRail.h"
 #include "DPIAwareness.h"
 #include "Theme.h"
 #include "DrawReaderIcon.h"
@@ -16,7 +18,7 @@ const UINT_PTR subclassId=0x524e4156;
 const int commands[]={IDM_LIBRARY,IDM_VIEW,IDM_READER_SEARCH,IDM_MARK,IDM_DISPLAY,IDM_FOCUS,(int)moreId};
 const wchar_t* labels[]={L"书库",L"阅读目录",L"查找",L"书签",L"显示与主题",L"专注阅读",L"更多"};
 const ReaderIcon icons[]={ReaderIcon::Library,ReaderIcon::Toc,ReaderIcon::Search,ReaderIcon::Bookmark,ReaderIcon::Display,ReaderIcon::Focus,ReaderIcon::Menu};
-HWND owner=NULL,pane=NULL,viewport=NULL,buttons[9]={},tips=NULL,previousFocus=NULL,focusExit=NULL;
+HWND owner=NULL,pane=NULL,viewport=NULL,buttons[9]={},tips=NULL,previousFocus=NULL;
 HMENU root=NULL;HFONT font=NULL,headingFont=NULL;UINT dpi=96;
 ReaderNavigationGeometry geometry={};ReaderAltNavigationGesture altGesture;
 int scrollPosition=0;bool keyboard=false,tracking=false,closing=false,finishing=false,focusMode=false;
@@ -29,11 +31,10 @@ void RefreshEmphasis(HWND moved=nullptr)
     if(!pane) return;
     if(moved) {TRACKMOUSEEVENT track={sizeof(track),TME_LEAVE,moved,0};TrackMouseEvent(&track);}
     POINT mouse;GetCursorPos(&mouse);RECT bounds;GetWindowRect(pane,&bounds);
-    bool clear=ReaderRailClear(focusMode,GetForegroundWindow()==owner,PtInRect(&bounds,mouse)!=FALSE,
+    bool clear=ReaderRailClear(focusMode,ReaderNavigationForeground()!=FALSE,PtInRect(&bounds,mouse)!=FALSE,
         ReaderNavigationContains(GetFocus())!=FALSE,tracking||finishing,ReaderNavigationContains(GetCapture())!=FALSE);
-    bool previous=GetProp(pane,L"ReaderRailClear")!=nullptr;
     if(clear) SetProp(pane,L"ReaderRailClear",(HANDLE)1);else RemoveProp(pane,L"ReaderRailClear");
-    if(clear!=previous) RedrawWindow(pane,nullptr,nullptr,RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_NOERASE);
+    ReaderFocusRailEmphasis(clear);
 }
 void Position(HWND child,int x,int y,int width,int height)
 {
@@ -45,10 +46,10 @@ void RememberFocus() {HWND focus=GetFocus();if(focus && !ReaderNavigationContain
 void Leave(bool restore)
 {
     bool wasKeyboard=keyboard;keyboard=false;altGesture.Cancel();RemoveProp(owner,L"ReaderMenuKeyboard");
-    if(restore && GetForegroundWindow()==owner)
+    if(restore && ReaderNavigationForeground())
         SetFocus(IsWindow(previousFocus)&&IsWindowVisible(previousFocus)&&IsWindowEnabled(previousFocus)?previousFocus:owner);
     if(wasKeyboard) SendMessage(owner,WM_READER_NAVIGATION_ACCESS,FALSE,0);
-    if(GetForegroundWindow()==owner && !IsWindowVisible(GetFocus())) SetFocus(owner);
+    if(ReaderNavigationForeground() && !IsWindowVisible(GetFocus())) SetFocus(owner);
     RefreshEmphasis();
 }
 void Enter()
@@ -64,6 +65,7 @@ void Scroll(int position)
     SetScrollInfo(viewport,SB_VERT,&info,TRUE);
     RECT client;GetClientRect(viewport,&client);
     for(int i=0;i<7;++i) Position(buttons[i],0,i*geometry.itemHeight-scrollPosition,client.right,geometry.itemHeight);
+    ReaderScrollbarsUpdate(viewport);
 }
 void EnsureFocusVisible(HWND button)
 {
@@ -112,7 +114,7 @@ void OpenMore(bool fromKeyboard,int direct=-1)
     tracking=false;finishing=true;
     if(direct<0) {while(GetMenuItemCount(popup)>0) RemoveMenu(popup,0,MF_BYPOSITION);DestroyMenu(popup);}
     if(!pane || !IsWindow(owner)) return;
-    if(fromKeyboard && !command && !closing && GetForegroundWindow()==owner) SetFocus(buttons[6]);else Leave(true);
+    if(fromKeyboard && !command && !closing && ReaderNavigationForeground()) SetFocus(buttons[6]);else Leave(true);
     // The command still refers to the captured history IDs; rebuild afterward.
     if(command) PostMessage(owner,WM_COMMAND,command,0);
     PostMessage(owner,WM_READER_NATIVE_MENU_CLOSED,0,0);RefreshEmphasis();
@@ -126,7 +128,6 @@ void Fonts(UINT next)
     m.lfMessageFont.lfHeight=-MulDiv(9,dpi,72);m.lfMessageFont.lfWidth=0;font=CreateFontIndirect(&m.lfMessageFont);
     m.lfMessageFont.lfHeight=-MulDiv(11,dpi,72);m.lfMessageFont.lfWeight=FW_SEMIBOLD;headingFont=CreateFontIndirect(&m.lfMessageFont);
     for(HWND button:buttons) SendMessage(button,WM_SETFONT,(WPARAM)font,TRUE);
-    if(focusExit) SendMessage(focusExit,WM_SETFONT,(WPARAM)font,TRUE);
 }
 void Invoke(HWND button)
 {
@@ -196,7 +197,9 @@ LRESULT CALLBACK PaneProc(HWND window,UINT message,WPARAM wParam,LPARAM lParam)
 } // namespace
 HMENU ReaderMenuHandle(HWND window) {HMENU menu=(HMENU)GetProp(window,L"ReaderMainMenu");return menu?menu:GetMenu(window);}
 HWND ReaderNavigationWindow() {return pane;}
-BOOL ReaderNavigationContains(HWND window) {return window && pane && (window==pane || IsChild(pane,window));}
+BOOL ReaderNavigationContains(HWND window) {return window && pane && (window==pane || IsChild(pane,window) || ReaderFocusRailContains(window));}
+BOOL ReaderNavigationForeground() {return GetForegroundWindow()==owner || ReaderFocusRailContains(GetForegroundWindow());}
+void FollowReaderNavigation() {ReaderFocusRailFollow();}
 BOOL ReaderNavigationTracking() {return tracking || finishing;}
 void ReaderNavigationMenuClosed() {finishing=false;RefreshEmphasis();}
 void RefreshReaderNavigationEmphasis() {RefreshEmphasis();}
@@ -221,10 +224,6 @@ BOOL CreateReaderNavigation(HWND window,HMENU menu)
         SetWindowSubclass(buttons[i],ButtonProc,subclassId,0);
         TOOLINFO tip={};tip.cbSize=sizeof(tip);tip.uFlags=TTF_IDISHWND|TTF_SUBCLASS;tip.hwnd=pane;tip.uId=(UINT_PTR)buttons[i];tip.lpszText=(wchar_t*)text;SendMessage(tips,TTM_ADDTOOL,0,(LPARAM)&tip);
     }
-    focusExit=CreateWindow(L"BUTTON",L"退出专注，固定侧栏（Esc）",WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,0,0,1,1,pane,(HMENU)IDM_FOCUS,c.hInstance,nullptr);
-    SetProp(focusExit,L"ReaderFlatIcon",(HANDLE)1);SetProp(focusExit,L"ReaderIcon",(HANDLE)(INT_PTR)ReaderIcon::Focus);
-    SetWindowSubclass(focusExit,ButtonProc,subclassId,0);
-    TOOLINFO exitTip={};exitTip.cbSize=sizeof(exitTip);exitTip.uFlags=TTF_IDISHWND|TTF_SUBCLASS;exitTip.hwnd=pane;exitTip.uId=(UINT_PTR)focusExit;exitTip.lpszText=(wchar_t*)L"退出专注，固定侧栏（Esc）";SendMessage(tips,TTM_ADDTOOL,0,(LPARAM)&exitTip);
     SetWindowPos(viewport,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
     SetProp(owner,L"ReaderMainMenu",root);Fonts(GetWindowDpiCompat(owner));SetMenu(owner,NULL);ThemeAttachWindow(tips);return TRUE;
 }
@@ -235,12 +234,11 @@ void LayoutReaderNavigation(int width,int height,BOOL visible,BOOL panel,BOOL fo
     if(focusMode) SetProp(pane,L"ReaderFocusRail",(HANDLE)1);else RemoveProp(pane,L"ReaderFocusRail");
     Fonts(GetWindowDpiCompat(owner));auto next=ReaderNavigationLayout(width,height,dpi,visible!=FALSE,panel!=FALSE,focusMode);
     bool changed=modeChanged || next.compact!=geometry.compact;geometry=next;
+    ReaderFocusRailLayout(owner,pane,geometry.width,height,focusMode);
     Position(pane,0,0,geometry.width,height);Position(viewport,0,geometry.headerHeight,geometry.width-1,geometry.viewportHeight);
     for(int i=0;i<7;++i) {if(geometry.compact) SetProp(buttons[i],L"ReaderCompact",(HANDLE)1);else RemoveProp(buttons[i],L"ReaderCompact");if(changed) InvalidateRect(buttons[i],NULL,FALSE);}
     Scroll(scrollPosition);
-    Position(focusExit,Scale(8),Scale(8),Scale(28),Scale(28));
-    if((IsWindowVisible(focusExit)!=FALSE)!=focusMode) ShowWindow(focusExit,focusMode?SW_SHOWNA:SW_HIDE);
-    if(modeChanged) {SetWindowText(buttons[5],focusMode?L"退出专注，固定侧栏":L"专注阅读");TOOLINFO tip={};tip.cbSize=sizeof(tip);tip.hwnd=pane;tip.uId=(UINT_PTR)buttons[5];tip.lpszText=(wchar_t*)(focusMode?L"退出专注，固定侧栏":labels[5]);SendMessage(tips,TTM_UPDATETIPTEXT,0,(LPARAM)&tip);}
+    if(modeChanged) {SetWindowText(buttons[5],focusMode?L"退出专注，固定侧栏（Esc）":L"专注阅读");TOOLINFO tip={};tip.cbSize=sizeof(tip);tip.hwnd=pane;tip.uId=(UINT_PTR)buttons[5];tip.lpszText=(wchar_t*)(focusMode?L"退出专注，固定侧栏（Esc）":labels[5]);SendMessage(tips,TTM_UPDATETIPTEXT,0,(LPARAM)&tip);}
     int size=Scale(28),left=geometry.compact?(geometry.width-size)/2:(geometry.width-Scale(64))/2;
     Position(buttons[7],left,geometry.footerTop+Scale(8),size,size);
     Position(buttons[8],geometry.compact?left:left+Scale(36),geometry.footerTop+Scale(geometry.compact?40:8),size,size);
@@ -253,7 +251,6 @@ void ReaderNavigationState(BOOL back,BOOL forward,BOOL editing,UINT active,BOOL 
 {
     if(pane)
     {
-        EnableWindow(focusExit,!editing);
         for(int i=0;i<9;++i)
         {
             BOOL dependent=i==1 || i==2 || i==3;
@@ -275,7 +272,7 @@ BOOL ReaderNavigationWheel(UINT message,WPARAM wParam,LPARAM lParam)
 }
 BOOL ReaderNavigationTranslate(MSG* message)
 {
-    if(!pane || (message->hwnd!=owner && !IsChild(owner,message->hwnd))) return FALSE;
+    if(!pane || (message->hwnd!=owner && !IsChild(owner,message->hwnd) && !ReaderNavigationContains(message->hwnd))) return FALSE;
     bool control=(GetKeyState(VK_CONTROL)&0x8000)!=0,alt=(GetKeyState(VK_MENU)&0x8000)!=0,shift=(GetKeyState(VK_SHIFT)&0x8000)!=0;
     if(message->message==WM_KEYDOWN || message->message==WM_SYSKEYDOWN)
     {
@@ -286,6 +283,13 @@ BOOL ReaderNavigationTranslate(MSG* message)
         if(action==navigation_key_previous || action==navigation_key_next) {FocusNext(FocusIndex(),action==navigation_key_previous?-1:1);return TRUE;}
         if(action==navigation_key_first || action==navigation_key_last) {FocusNext(action==navigation_key_first?8:0,action==navigation_key_first?1:-1);return TRUE;}
         if(action==navigation_key_activate) {if(!repeat && IsWindowEnabled(message->hwnd)) Invoke(message->hwnd);return TRUE;}
+        if(message->wParam==VK_TAB && ReaderNavigationContains(message->hwnd) && !alt && !control)
+        {
+            int index=FocusIndex();
+            if((shift&&index==0)||(!shift&&index==8)) {Leave(false);SetFocus(owner);}
+            else FocusNext(index,shift?-1:1);
+            return TRUE;
+        }
         if(alt && !control && message->wParam>='A' && message->wParam<='Z') {int index=Mnemonic((wchar_t)message->wParam);if(index>=0) {Enter();OpenMore(true,index);return TRUE;}}
     }
     if(message->message==WM_SYSKEYUP && message->wParam==VK_MENU) {if(altGesture.Up(VK_MENU)) {if(keyboard) Leave(true);else Enter();}return TRUE;}
@@ -300,7 +304,8 @@ BOOL ReaderNavigationSystemMenu(WPARAM wParam,LPARAM lParam)
 void CancelReaderNavigation() {closing=true;altGesture.Cancel();if(tracking) EndMenu();else Leave(false);}
 void DestroyReaderNavigation()
 {
-    closing=true;if(tracking) EndMenu();if(pane) DestroyWindow(pane);pane=viewport=tips=focusExit=NULL;
+    ReaderFocusRailDestroy();
+    closing=true;if(tracking) EndMenu();if(pane) DestroyWindow(pane);pane=viewport=tips=NULL;
     if(font) DeleteObject(font);if(headingFont) DeleteObject(headingFont);font=headingFont=NULL;
     if(root) {RemoveProp(owner,L"ReaderMainMenu");DestroyMenu(root);root=NULL;}
     RemoveProp(owner,L"ReaderMenuKeyboard");owner=previousFocus=NULL;keyboard=tracking=finishing=focusMode=false;

@@ -11,6 +11,7 @@ void ThemeUpdateMenu(HWND window);
 void ThemeShutdown();
 const ReaderPalette& ThemeColors();
 ReaderPalette ThemeControlPalette(HWND window);
+ReaderScrollColors ThemeScrollbarColors(HWND window);
 ReaderColors ThemeReadingColors(const header_t* settings);
 HBRUSH ThemeWindowBrush();
 void ThemeSetCurrentChapter(HWND tree, HTREEITEM item);

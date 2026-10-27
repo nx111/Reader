@@ -63,6 +63,7 @@ static void TreeView_EnsureVisible(HWND, HTREEITEM item) { assert(_syncingToc); 
 static BOOL ResetLayerd(HWND) { return resetLayered; }
 static void OnDraw(HWND) { ++composed; }
 static void SetLayeredWindowAttributes(HWND,int,int,int) { ++uniform; }
+static void ApplyReaderBodyAlpha(HWND) { ++uniform; }
 static void InvalidateRect(HWND child,void*,BOOL erase) { assert(!erase); invalidated.push_back(child); }
 static void SyncCurrentChapter(BOOL reveal = FALSE);
 

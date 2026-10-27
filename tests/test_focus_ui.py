@@ -30,15 +30,20 @@ class FocusUiTests(unittest.TestCase):
     def test_actual_repeated_focus_restore_preserves_toc_bookmarks_and_anchor(self):self.run_case('restore')
     def test_permanent_compact_rail_reserves_space_at_100_to_200_dpi(self):self.run_case('geometry')
     def test_mouse_focus_menu_capture_and_app_activation_choose_clear_rail(self):self.run_case('emphasis')
-    def test_local_blend_preserves_readable_light_dark_colors(self):self.run_case('palette')
+    def test_scrollbar_gray_blends_with_light_dark_theme(self):self.run_case('palette')
     def test_shared_internal_padding_scales_and_clamps_on_narrow_columns(self):self.run_case('padding')
 
     def test_event_routes_have_no_hover_hiding_and_only_repaint_the_rail(self):
         nav=(ROOT/'Reader/NavigationPane.cpp').read_text();reader=(ROOT/'Reader/Reader.cpp').read_text()
         self.assertNotIn('SetTimer',nav);self.assertNotIn('SetLayeredWindowAttributes',nav)
         emphasis=nav.split('void RefreshEmphasis(',1)[1].split('void Position(',1)[0]
-        self.assertIn('RedrawWindow(pane',emphasis);self.assertNotIn('UpdateReaderLayout',emphasis);self.assertNotIn('Invalidate(owner',emphasis)
-        self.assertIn('L"退出专注，固定侧栏（Esc）"',nav);self.assertIn('ShowWindow(focusExit,focusMode?SW_SHOWNA:SW_HIDE)',nav)
+        self.assertIn('ReaderFocusRailEmphasis(clear)',emphasis);self.assertNotIn('UpdateReaderLayout',emphasis);self.assertNotIn('Invalidate(owner',emphasis)
+        self.assertNotIn('focusExit',nav)
+        commands=nav.split('const int commands[]={',1)[1].split('};',1)[0].split(',')
+        self.assertEqual(commands.count('IDM_FOCUS'),1);self.assertEqual(commands[5],'IDM_FOCUS')
+        self.assertIn('SetWindowText(buttons[5],focusMode?L"退出专注，固定侧栏（Esc）"',nav)
+        self.assertIn('tip.uId=(UINT_PTR)buttons[5]',nav);self.assertIn('TTM_UPDATETIPTEXT',nav)
+        self.assertIn('else SendMessage(owner,WM_COMMAND,command,(LPARAM)button)',nav)
         access=reader.split('case WM_READER_NAVIGATION_ACCESS:',1)[1].split('case ',1)[0]
         self.assertNotIn('UpdateReaderLayout',access);self.assertNotIn('Invalidate',access)
         loop=reader.split('// Main message loop:',1)[1].split('    Exit();',1)[0]

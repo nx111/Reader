@@ -45,6 +45,15 @@
     <ClInclude Include="LibraryDlg.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="LibraryModel.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ReadingState.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Scrollbar.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ScrollbarModel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FocusRail.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Theme.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="BookmarkActions.h" />
     <ClInclude Include="BookmarkExport.h" />
@@ -131,6 +140,12 @@
     <ClCompile Include="PdfBook.cpp" />
     <ClCompile Include="PdfEngine.cpp" />
     <ClCompile Include="NavigationPane.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="Scrollbar.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FocusRail.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Theme.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Reader.cpp">
       <Filter>Source Files</Filter>

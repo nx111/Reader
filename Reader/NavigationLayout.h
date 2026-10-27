@@ -13,7 +13,7 @@ inline ReaderNavigationGeometry ReaderNavigationLayout(int width,int height,int 
 {
     width=(std::max)(0,width);height=(std::max)(0,height);dpi=(std::max)(96,dpi);
     ReaderNavigationGeometry g={};g.width=ReaderNavigationWidth(width,dpi,visible,panel,focus);
-    g.compact=g.width<ReaderScale(160,dpi);g.headerHeight=(std::min)(height,ReaderScale(44,dpi));
+    g.compact=g.width<ReaderScale(160,dpi);g.headerHeight=focus?0:(std::min)(height,ReaderScale(44,dpi));
     g.footerHeight=(std::min)((std::max)(0,height-g.headerHeight),ReaderScale(g.compact?76:48,dpi));
     g.footerTop=height-g.footerHeight;g.viewportHeight=(std::max)(0,g.footerTop-g.headerHeight);
     g.itemHeight=ReaderScale(40,dpi);g.contentHeight=g.itemHeight*7;

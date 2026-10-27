@@ -1,5 +1,21 @@
 #pragma once
 #include <algorithm>
+#include <cstdint>
+
+class ReaderCtrlWheel
+{
+    int remainder=0;uint64_t book=0;
+public:
+    void Reset() {remainder=0;book=0;}
+    int Feed(int delta,bool control,bool reading,bool capture,uint64_t token)
+    {
+        if(!control || !reading || capture || !token) {Reset();return 0;}
+        if(book!=token) {remainder=0;book=token;}
+        int total=remainder+delta,steps=total/120;remainder=total%120;return steps;
+    }
+};
+inline int ReaderFontPoints(int current,int steps)
+{return (int)(std::max)(int64_t(1),(std::min)(int64_t(72),(int64_t)current+steps));}
 
 inline int ReaderItemPadding(int dpi) { return (std::max)(1,8*(std::max)(96,dpi)/96); }
 inline int ReaderItemInset(int width,int dpi)

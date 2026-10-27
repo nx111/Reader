@@ -1,5 +1,6 @@
 #include "Theme.h"
 #include "ReaderInteraction.h"
+#include "Scrollbar.h"
 #include "DrawReaderIcon.h"
 #include <algorithm>
 #include "DPIAwareness.h"
@@ -330,18 +331,21 @@ void Attach(HWND window, bool root)
 {
     if (!window || GetWindowThreadProcessId(window, NULL) != GetCurrentThreadId()) return;
     DWORD_PTR reference = 0;
-    if (GetWindowSubclass(window, WindowProc, subclassId, &reference)) { Apply(window, (WindowData*)reference); return; }
+    if (GetWindowSubclass(window, WindowProc, subclassId, &reference)) { Apply(window, (WindowData*)reference); ReaderScrollbarsAttach(window); return; }
     wchar_t type[64] = {}; GetClassName(window, type, 64);
     WindowData* data = new WindowData(root, type);
     if (!SetWindowSubclass(window, WindowProc, subclassId, (DWORD_PTR)data)) { delete data; return; }
     SetWindowLongPtr(window, GWL_STYLE, GetWindowLongPtr(window, GWL_STYLE) | WS_CLIPSIBLINGS);
     if (root) { roots.insert(window); SetWindowLongPtr(window, GWL_STYLE, GetWindowLongPtr(window, GWL_STYLE) | WS_CLIPCHILDREN); }
     Apply(window, data);
+    ReaderScrollbarsAttach(window);
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR reference)
 {
     WindowData* data = (WindowData*)reference;
+    if(data->root && (message==WM_ACTIVATEAPP || message==WM_CANCELMODE || message==WM_SETTINGCHANGE))
+        ReaderScrollbarsRefresh(window,message==WM_CANCELMODE || (message==WM_ACTIVATEAPP&&!wParam));
     if (message == WM_NCDESTROY)
     {
         roots.erase(window); LRESULT result = DefSubclassProc(window, message, wParam, lParam);
@@ -473,16 +477,17 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 const ReaderPalette& ThemeColors() { return palette; }
 ReaderPalette ThemeControlPalette(HWND window)
 {
-    for(HWND ancestor=window;ancestor;ancestor=GetParent(ancestor))
-        if(GetProp(ancestor,L"ReaderFocusRail"))
-        {
-            HIGHCONTRAST high={};high.cbSize=sizeof(high);
-            bool highContrast=SystemParametersInfo(SPI_GETHIGHCONTRAST,sizeof(high),&high,0)&&(high.dwFlags&HCF_HIGHCONTRASTON);
-            return ReaderFocusPalette(palette,reading.background,highContrast || GetProp(ancestor,L"ReaderRailClear")!=nullptr);
-        }
+    // Real desktop alpha belongs to the separate rail host, not paint mixing.
     return palette;
 }
 HBRUSH ThemeWindowBrush() { return windowBrush; }
+ReaderScrollColors ThemeScrollbarColors(HWND window)
+{
+    wchar_t type[64]={};GetClassName(window,type,64);auto colors=ThemeControlPalette(window);
+    bool content=!_wcsicmp(type,L"ReaderContentView")||GetProp(window,L"ReaderReadingEditor");
+    uint32_t background=content?reading.background:!_wcsicmp(type,L"ReaderNavigationViewport")?colors.window:colors.surface;
+    return ReaderScrollbarColors(colors,background);
+}
 ReaderColors ThemeReadingColors(const header_t* settings)
 {
     if (!settings->reading_custom) return { palette.surface, palette.text, palette.text, false };
@@ -540,6 +545,7 @@ void ThemeSetCurrentChapter(HWND tree, HTREEITEM item)
 }
 void ThemeShutdown()
 {
+    ReaderScrollbarsShutdown();
     while (!menus.empty()) RestoreMenu(menus.begin()->second->menu);
     roots.clear();
     if (windowBrush) DeleteObject(windowBrush); if (surfaceBrush) DeleteObject(surfaceBrush); if (readingBrush) DeleteObject(readingBrush);
