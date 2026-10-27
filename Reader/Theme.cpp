@@ -196,8 +196,32 @@ LRESULT DrawPaddedCell(HWND list,NMLVCUSTOMDRAW* draw)
     RECT label=cell;int padding=ReaderItemInset(cell.right-cell.left,GetWindowDpiCompat(list));label.left+=padding;label.right-=padding;
     SetBkMode(draw->nmcd.hdc,TRANSPARENT);SetTextColor(draw->nmcd.hdc,!IsWindowEnabled(list)?palette.disabled:selected?palette.selectedText:library&&column>0?palette.muted:palette.text);
     DrawText(draw->nmcd.hdc,text.data(),-1,&label,DT_LEFT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
-    if(GetFocus()==list && (ListView_GetItemState(list,row,LVIS_FOCUSED)&LVIS_FOCUSED)) {RECT cue=cell;InflateRect(&cue,-1,-1);DrawFocusRect(draw->nmcd.hdc,&cue);}
+    if(!library && GetFocus()==list && (ListView_GetItemState(list,row,LVIS_FOCUSED)&LVIS_FOCUSED)) {RECT cue=cell;InflateRect(&cue,-1,-1);DrawFocusRect(draw->nmcd.hdc,&cue);}
     RestoreDC(draw->nmcd.hdc,saved);return CDRF_SKIPDEFAULT;
+}
+
+LRESULT DrawLibraryRow(HWND list,NMLVCUSTOMDRAW* draw)
+{
+    const int item=(int)draw->nmcd.dwItemSpec;
+    RECT row={},client; if(!ListView_GetItemRect(list,item,&row,LVIR_BOUNDS)) return CDRF_DODEFAULT;
+    GetClientRect(list,&client);row.left=client.left;row.right=client.right;
+    int saved=SaveDC(draw->nmcd.hdc);IntersectClipRect(draw->nmcd.hdc,row.left,row.top,row.right,row.bottom);
+    const UINT state=ListView_GetItemState(list,item,LVIS_SELECTED|LVIS_FOCUSED);
+    Fill(draw->nmcd.hdc,row,state&LVIS_SELECTED?palette.selected:palette.surface);
+    const int columns=Header_GetItemCount(ListView_GetHeader(list));
+    for(int column=0;column<columns;++column)
+    {
+        NMLVCUSTOMDRAW cell=*draw;cell.iSubItem=column;
+        DrawPaddedCell(list,&cell);
+    }
+    if(GetFocus()==list && IsWindowEnabled(list) && (state&LVIS_FOCUSED)
+        && !(SendMessage(list,WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS))
+    {
+        RECT cue=row;InflateRect(&cue,-1,-1);
+        if(cue.left<cue.right && cue.top<cue.bottom) DrawFocusRect(draw->nmcd.hdc,&cue);
+    }
+    RestoreDC(draw->nmcd.hdc,saved);
+    return CDRF_SKIPDEFAULT|CDRF_SKIPPOSTPAINT;
 }
 
 void RestoreMenu(HMENU menu)
@@ -442,6 +466,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             LRESULT inherited = DefSubclassProc(window, message, wParam, lParam);
             if (draw->dwDrawStage==CDDS_ITEMPREPAINT && GetProp(from,L"ReaderReadingSidebar")) return DrawReadingRow(from,(NMTVCUSTOMDRAW*)lParam);
             if (draw->dwDrawStage == CDDS_PREPAINT) return inherited | CDRF_NOTIFYITEMDRAW;
+            if (draw->dwDrawStage==CDDS_ITEMPREPAINT && GetProp(from,L"ReaderLibraryList"))
+            { if(inherited&CDRF_SKIPDEFAULT) return inherited;return DrawLibraryRow(from,(NMLVCUSTOMDRAW*)lParam); }
             if (draw->dwDrawStage==(CDDS_ITEMPREPAINT|CDDS_SUBITEM) && GetProp(from,L"ReaderPaddedList"))
             { if(inherited&CDRF_SKIPDEFAULT) return inherited;return DrawPaddedCell(from,(NMLVCUSTOMDRAW*)lParam); }
             if (draw->dwDrawStage == CDDS_ITEMPREPAINT)

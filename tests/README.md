@@ -273,3 +273,22 @@ Only the documented DWM export is resolved, from the system directory.
 The native code changes no client geometry, hit testing or opacity. These are
 API-contract and source-boundary checks, not Windows 10/11 GUI, DWM pixels,
 caption-button accessibility or DPI visual verification.
+
+## Library row selection (targeted)
+
+```sh
+python -m unittest discover -s tests -p test_library_row_paint.py -v
+python tests/check_windows_syntax.py --units Theme
+python tests/check_windows_syntax.py --units Theme --network
+```
+
+Four checks compile the production cell/row painters against list-view/GDI
+substitutes. They verify a continuous full-width selected background and one
+row focus cue across 100–200% DPI, horizontal scroll and narrow/wide clients;
+column fonts/text/padding; native multi-selection and focus without changing
+item state; hidden keyboard cues; disabled/high-contrast palette use; invalid
+row fallback and unchanged drawing of other padded lists. The library handles
+item-prepaint as one unit and suppresses native focus postpaint. This follows
+the [documented custom-draw protocol](https://learn.microsoft.com/en-us/windows/win32/controls/about-custom-draw).
+These checks do not verify actual Windows list-view pixels, UIA or keyboard
+interaction on a desktop.
