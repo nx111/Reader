@@ -5,6 +5,7 @@
 #include "Jsondata.h"
 #include "DPIAwareness.h"
 #include "LibraryModel.h"
+#include "WindowAppearance.h"
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
@@ -44,7 +45,8 @@ BOOL Cache::init()
     if (!ok) { free(encoded); return FALSE; } // Never replace a corrupt/future cache with defaults.
     m_capacity = m_size;
     m_jsonbak = encoded; m_jsonlen = length;
-    m_needsMigration = schema < CACHE_SCHEMA_VERSION; m_loadedSchema = schema;
+    const BOOL normalizedOpacity = ReaderNormalizeOpacity(*get_header());
+    m_needsMigration = schema < CACHE_SCHEMA_VERSION || normalizedOpacity; m_loadedSchema = schema;
     rebuild_indexes();
     return TRUE;
 }
@@ -60,6 +62,7 @@ BOOL Cache::exit()
 
 BOOL Cache::save()
 {
+    if(get_header() && ReaderNormalizeOpacity(*get_header())) m_needsMigration=TRUE;
     char* json = create_json(get_header(), &m_bookmarks);
     if (!json) return FALSE;
     const int size = (int)strlen(json);
@@ -338,9 +341,9 @@ void Cache::default_header(header_t* header)
 
     // default style
     header->style = WS_OVERLAPPEDWINDOW;
-    header->exstyle = WS_EX_ACCEPTFILES | WS_EX_LAYERED;
+    header->exstyle = WS_EX_ACCEPTFILES;
     header->fs_style = WS_OVERLAPPEDWINDOW;
-    header->fs_exstyle = WS_EX_ACCEPTFILES | WS_EX_LAYERED;
+    header->fs_exstyle = WS_EX_ACCEPTFILES;
 
     // default placement
     header->placement.length = sizeof(WINDOWPLACEMENT);

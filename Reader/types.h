@@ -221,7 +221,7 @@ typedef struct header_t
     u32 font_color_title;
     int use_same_font;
     u32 bg_color;
-    BYTE alpha;
+    BYTE alpha; // Legacy JSON field, normalized to 255.
     int char_gap;
     int line_gap;
     int paragraph_gap;
@@ -297,8 +297,6 @@ typedef struct window_info_t
     display_status_t status;
     display_status_t status_bak; // for edit mode
 
-    BOOL bLayered;
-    BOOL bLayered_bak;
     BOOL bTopMost;
 } window_info_t;
 

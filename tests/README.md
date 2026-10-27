@@ -216,3 +216,13 @@ unchanged text anchors and opaque focus body. Both configurations now check 25
 translation units, plus resource compilation. No Windows desktop, native tracking,
 UIA/screen reader, touch, DWM pixels, AltTab or actual flicker has been run here.
 See [implementation and runtime checklist](../doc/scrollbar-focus-zoom.md).
+
+## Targeted fixed-opacity checks
+
+The latest user preference is to test only affected paths. For the fixed-opacity
+change run the 7 checks documented in [opaque-window.md](../doc/opaque-window.md);
+do not treat the previous 99-case record as a new full-suite run. Cache tests
+reuse the production cache harness but execute only opacity normalization, legacy
+migration/data preservation and invalid-cache protection. Changed Reader/Cache/Page
+units receive syntax checks in both configurations. No unrelated format/PDF/library
+UI tests or sanitizer matrix were run for this change; resources are unchanged.

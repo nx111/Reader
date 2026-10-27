@@ -191,6 +191,7 @@
     <ClInclude Include="ReaderIcons.h" />
     <ClInclude Include="DrawReaderIcon.h" />
 
+    <ClInclude Include="WindowAppearance.h" />
     <ClInclude Include="ThemePalette.h" />
     <ClInclude Include="GdiSurface.h" />
     <ClInclude Include="DisplaySet.h" />

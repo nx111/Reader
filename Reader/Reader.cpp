@@ -22,6 +22,7 @@
 #include "Theme.h"
 #include "NavigationPane.h"
 #include "ReaderInteraction.h"
+#include "WindowAppearance.h"
 #include "Scrollbar.h"
 #include "BookmarkActions.h"
 #include "PdfBook.h"
@@ -43,8 +44,6 @@
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "shell32.lib")
-
-#define MIN_ALPHA_VALUE             0x64
 
 #define MAX_LOADSTRING              256
 
@@ -98,12 +97,11 @@ static ReaderCtrlWheel _ctrlWheel;
 static HIMAGELIST _treePadding = NULL;
 static int _treePaddingWidth = 0;
 static BOOL _focusMode = FALSE, _tocVisible = FALSE, _syncingToc = FALSE, _routingWheel = FALSE;
-static BYTE ReaderBodyAlpha() {return (_focusMode || _panelFromFocus)?255:(_header->alpha < MIN_ALPHA_VALUE ? MIN_ALPHA_VALUE : _header->alpha);}
-static void ApplyReaderBodyAlpha(HWND window)
+static void ApplyReaderOpaqueWindow(HWND window)
 {
-    BYTE alpha=ReaderBodyAlpha(),previous=0;DWORD flags=0;COLORREF key=0;
-    if(GetLayeredWindowAttributes(window,&key,&previous,&flags) && (flags&LWA_ALPHA) && previous==alpha) return;
-    SetLayeredWindowAttributes(window,0,alpha,LWA_ALPHA);
+    if(_header) ReaderNormalizeOpacity(*_header);
+    LONG_PTR style=GetWindowLongPtr(window,GWL_EXSTYLE),opaque=ReaderOpaqueExStyle(style);
+    if(style!=opaque) SetWindowLongPtr(window,GWL_EXSTYLE,opaque);
 }
 static RECT _readingRect = {};
 static ReadingGeometry _readingGeometry = {};
@@ -121,7 +119,7 @@ static HWND _hReadingView = NULL, _hSplitter = NULL;
 static WNDPROC _splitterProc = NULL, _markProc = NULL;
 static ReaderSplitterDrag _splitterDrag;
 static int _sidebarPreviewWidth = 240;
-static GdiSurface _readingSurface, _frameSurface;
+static GdiSurface _readingSurface;
 static UINT _chapterBookToken = 0, _markBookToken = 0;
 static std::vector<std::wstring> _chapterTitles, _markLabels;
 static LRESULT CALLBACK ReadingProc(HWND, UINT, WPARAM, LPARAM);
@@ -514,14 +512,14 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
        _header->placement.showCmd = SW_SHOWNORMAL;
    }
 
-   hWnd = CreateWindowEx(_header->exstyle, szWindowClass, szTitle, _header->style | WS_CLIPCHILDREN,
+   hWnd = CreateWindowEx(ReaderOpaqueExStyle(_header->exstyle), szWindowClass, szTitle, _header->style | WS_CLIPCHILDREN,
        _header->placement.rcNormalPosition.left, _header->placement.rcNormalPosition.top, 
        _header->placement.rcNormalPosition.right - _header->placement.rcNormalPosition.left,
        _header->placement.rcNormalPosition.bottom - _header->placement.rcNormalPosition.top,
       NULL, NULL, hInstance, NULL);
 
    SetWindowLongPtr(hWnd, GWL_STYLE, _header->style | WS_CLIPCHILDREN);
-   SetWindowLongPtr(hWnd, GWL_EXSTYLE, _header->exstyle);
+   SetWindowLongPtr(hWnd, GWL_EXSTYLE, ReaderOpaqueExStyle(_header->exstyle));
 
    SetWindowPlacement(hWnd, &_header->placement);
 
@@ -531,18 +529,10 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    }
    _hWnd = hWnd;
 
-   if (!_WndInfo.bLayered)
-   {
-       ApplyReaderBodyAlpha(hWnd);
-   }
+   ApplyReaderOpaqueWindow(hWnd);
 
    ShowSysTray(hWnd, _header->show_systray);
    ShowInTaskbar(hWnd, !_header->hide_taskbar);
-
-   if (_WndInfo.bLayered)
-   {
-       OnDraw(hWnd);
-   }
 
    //ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);
@@ -837,7 +827,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_PAINT:
         hdc = BeginPaint(hWnd, &ps);
         // TODO: Add any drawing code here...
-        if (!_WndInfo.bLayered)
         {
             int saved = SaveDC(hdc);
             ExcludeClipRect(hdc, _readingRect.left, _readingRect.top, _readingRect.right, _readingRect.bottom);
@@ -1097,8 +1086,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_MOUSEHWHEEL:
     case WM_MOUSEWHEEL:
         {
-            const BYTE MAX_ALPHA = 0xff;
-            const BYTE UNIT_STEP = 0x05;
             if (_routingWheel) return 0;
             if (ReaderNavigationWheel(message,wParam,lParam)) {_ctrlWheel.Reset();return 0;}
             POINT wheel = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -1138,18 +1125,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 Save(hWnd);return 0;
             }
             if (message == WM_MOUSEHWHEEL) return 0;
-            if (GET_WHEEL_DELTA_WPARAM(wParam) > 0)
-            {
-                if (GetAsyncKeyState(VK_MENU) & 0x8000)
-                { _textAlpha=(std::min)((int)MAX_ALPHA,(int)_textAlpha+UNIT_STEP);if(_WndInfo.bLayered) OnDraw(hWnd); }
-                else OnLineUp(hWnd,message,wParam,lParam);
-            }
-            else if(GET_WHEEL_DELTA_WPARAM(wParam) < 0)
-            {
-                if (GetAsyncKeyState(VK_MENU) & 0x8000)
-                { _textAlpha=(std::max)(0x1f,(int)_textAlpha-UNIT_STEP);if(_WndInfo.bLayered) OnDraw(hWnd); }
-                else OnLineDown(hWnd,message,wParam,lParam);
-            }
+            if (GetAsyncKeyState(VK_MENU)&0x8000) return 0; // Retired transparency gesture.
+            if(GET_WHEEL_DELTA_WPARAM(wParam)>0) OnLineUp(hWnd,message,wParam,lParam);
+            else if(GET_WHEEL_DELTA_WPARAM(wParam)<0) OnLineDown(hWnd,message,wParam,lParam);
         }
         break;
     case WM_ERASEBKGND:
@@ -2411,10 +2389,9 @@ static void UpdateReaderLayout(HWND hWnd)
     VisibleControl(_hTocHeading,panel);VisibleControl(_hTreeView,toc);VisibleControl(_hTreeMark,marks);
     if(panel && !geometry.drawer) PositionControl(_hSplitter,HWND_TOP,left+geometry.sidebarWidth,0,geometry.splitterWidth,(std::max)(1,(int)client.bottom));
     VisibleControl(_hSplitter,panel && !geometry.drawer);
-    _WndInfo.bLayered=_WndInfo.status!=ds_normal && !chrome && !panel && !_libraryVisible && (!_Book || _Book->GetBookType()!=book_pdf);
-    if(!_WndInfo.bLayered) ApplyReaderBodyAlpha(hWnd);
-    if(!_WndInfo.bLayered) PositionControl(_hReadingView,HWND_BOTTOM,reading.left,0,(std::max)(1,(int)(reading.right-reading.left)),(std::max)(1,(int)reading.bottom));
-    VisibleControl(_hReadingView,!_WndInfo.bLayered && !_libraryVisible);
+    ApplyReaderOpaqueWindow(hWnd);
+    PositionControl(_hReadingView,HWND_BOTTOM,reading.left,0,(std::max)(1,(int)(reading.right-reading.left)),(std::max)(1,(int)reading.bottom));
+    VisibleControl(_hReadingView,!_libraryVisible);
     LayoutLibraryView(hWnd,&reading,dpi,_libraryVisible); EC_UpdateReadingRect(&reading);
     ReaderNavigationState(_readingHistory.CanBack(),_readingHistory.CanForward(),EC_IsEditMode(),_libraryVisible?IDM_LIBRARY:toc?IDM_VIEW:marks?IDM_MARK:0, _Book && !_Book->IsLoading());
     if(changed) {InvalidateRect(hWnd,NULL,FALSE);InvalidateRect(_hReadingView,NULL,FALSE);}
@@ -2591,8 +2568,7 @@ LRESULT OnCreate(HWND hWnd)
     int argc;
     BOOL flag = TRUE;
     
-    _WndInfo.bLayered = (_header->style & WS_CAPTION) == 0;
-    _WndInfo.bLayered_bak = _WndInfo.bLayered;
+    ApplyReaderOpaqueWindow(hWnd);
     _WndInfo.bTopMost = (_header->exstyle & WS_EX_TOPMOST) == WS_EX_TOPMOST;
     _WndInfo.status = (_header->style & WS_MINIMIZEBOX) == 0 ? ds_fullscreen : (((_header->style & WS_CAPTION) == 0) ? ds_borderless : ds_normal);
 
@@ -2837,7 +2813,7 @@ LRESULT OnRestoreDefault(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 #endif
 #endif
     SetWindowLongPtr(hWnd, GWL_STYLE, _header->style | WS_CLIPCHILDREN);
-    SetWindowLongPtr(hWnd, GWL_EXSTYLE, _header->exstyle);
+    SetWindowLongPtr(hWnd, GWL_EXSTYLE, ReaderOpaqueExStyle(_header->exstyle));
 
     KS_RegisterAllHotKey(hWnd);
     SetGlobalKey(hWnd);
@@ -2846,10 +2822,7 @@ LRESULT OnRestoreDefault(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     SetWindowPlacement(hWnd, &_header->placement);
 
-    if (!_WndInfo.bLayered)
-    {
-        ApplyReaderBodyAlpha(hWnd);
-    }
+    ApplyReaderOpaqueWindow(hWnd);
 
     if (lastrule != _header->chapter_rule.rule)
     {
@@ -2899,82 +2872,10 @@ LRESULT OnPaint(HWND hWnd, HDC hdc)
     return 0;
 }
 
-VOID OnDraw(HWND hWnd)
-{
-    // Pixel transparency requires a whole-frame UpdateLayeredWindow submission.
-    // Reuse the DIB/DC and Page's text DIB; no child is recreated for a reading jump.
-    RECT page; GetClientRectExceptStatusBar(hWnd, &page);
-    int width = page.right, height = page.bottom;
-    HDC screen = GetDC(NULL);
-    if (!_frameSurface.Ensure(screen, width, height)) { ReleaseDC(NULL, screen); return; }
-    bool hasText = _Book && !_Book->IsLoading();
-    if (hasText)
-    {
-        PrepareReadingJump(hWnd); _Book->DrawPage(hWnd, screen, &page, TRUE); FinishReadingJump();
-        hasText = !_Book->IsBlankPage();
-    }
-    BYTE alpha = _header->alpha;
-    if (!hasText && alpha < MIN_ALPHA_VALUE) alpha = MIN_ALPHA_VALUE;
-    ReaderColors colors = ThemeReadingColors(_header);
-    DWORD pixel = ((DWORD)alpha << 24) | ((GetRValue(colors.background) * alpha / 255) << 16)
-        | ((GetGValue(colors.background) * alpha / 255) << 8) | (GetBValue(colors.background) * alpha / 255);
-    std::fill_n((DWORD*)_frameSurface.Pixels(), (size_t)width * height, pixel);
-    Gdiplus::Bitmap* image = LoadBGImage(width, height, alpha);
-    {
-        // A bottom-up DIB needs a negative stride when wrapped by GDI+.
-        Gdiplus::Bitmap frame(width, height, -width * 4, PixelFormat32bppPARGB,
-            _frameSurface.Pixels() + (size_t)(height - 1) * width * 4);
-        Gdiplus::Graphics graphics(&frame);
-        if (image)
-        {
-            graphics.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
-            graphics.DrawImage(image, 0, 0, width, height);
-        }
-        if (_loading && _loading->enable && _loading->image)
-        {
-            graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-            double scale = (std::min)(1.0, (std::min)((double)width / _loading->image->GetWidth(), (double)height / _loading->image->GetHeight()));
-            int w = (int)(_loading->image->GetWidth() * scale), h = (int)(_loading->image->GetHeight() * scale);
-            graphics.DrawImage(_loading->image, (width - w) / 2, (height - h) / 2, w, h);
-        }
-    }
-    BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-    if (hasText) AlphaBlend(_frameSurface.DC(), 0, 0, width, height, _Book->AlphaDC(), 0, 0, width, height, blend);
-    RECT bounds; GetWindowRect(hWnd, &bounds);
-    POINT position = { bounds.left, bounds.top }, source = { 0, 0 }; SIZE size = { width, height };
-    UpdateLayeredWindow(hWnd, screen, &position, &size, _frameSurface.DC(), &source, 0, &blend, ULW_ALPHA);
-    ReleaseDC(NULL, screen);
-    UpdateProgess(); UpdateTitle(hWnd); SyncCurrentChapter();
-}
-
-BOOL ResetLayerd(HWND hWnd)
-{
-    LONG_PTR exstyle;
-
-    if (_WndInfo.bLayered_bak != _WndInfo.bLayered)
-    {
-        exstyle = GetWindowLongPtr(hWnd, GWL_EXSTYLE);
-        exstyle &= ~WS_EX_LAYERED;
-        SetWindowLongPtr(hWnd, GWL_EXSTYLE, exstyle);
-        exstyle |= WS_EX_LAYERED;
-        SetWindowLongPtr(hWnd, GWL_EXSTYLE, exstyle);
-        _WndInfo.bLayered_bak = _WndInfo.bLayered;
-        return TRUE;
-    }
-
-    return FALSE;
-}
-
 VOID Invalidate(HWND hWnd, BOOL bOnlyClient, BOOL bErase)
 {
-    bool reset = ResetLayerd(hWnd) != FALSE;
-    if (_WndInfo.bLayered) OnDraw(hWnd); // UpdateLayeredWindow submits a whole composed frame.
-    else
-    {
-        if (reset) ApplyReaderBodyAlpha(hWnd);
-        if (_hReadingView) InvalidateRect(_hReadingView, NULL, FALSE);
-        if (!bOnlyClient) InvalidateRect(hWnd, NULL, FALSE);
-    }
+    if (_hReadingView) InvalidateRect(_hReadingView, NULL, FALSE);
+    if (!bOnlyClient) InvalidateRect(hWnd, NULL, FALSE);
 }
 
 LRESULT OnSize(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -3055,10 +2956,9 @@ LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         _header->exstyle = (DWORD)GetWindowLongPtr(hWnd, GWL_EXSTYLE) & (~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE));
 
         SetWindowLongPtr(hWnd, GWL_STYLE, _header->style | WS_CLIPCHILDREN);
-        SetWindowLongPtr(hWnd, GWL_EXSTYLE, _header->exstyle);
+        SetWindowLongPtr(hWnd, GWL_EXSTYLE, ReaderOpaqueExStyle(_header->exstyle));
         ShowWindow(_WndInfo.hStatusBar, SW_HIDE);
         SetMenu(hWnd, NULL);
-        _WndInfo.bLayered = TRUE;
         _WndInfo.status = ds_borderless;
         SetWindowPos(hWnd, NULL, rcWin.left, rcWin.top, rcWin.right-rcWin.left, rcWin.bottom-rcWin.top, windowPosFlags);
         CorrectWindowContentRect(hWnd, &rcContent, 0, windowPosFlags);
@@ -3066,7 +2966,7 @@ LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     else if (_WndInfo.status == ds_borderless)// show border
     {
         _header->style = (DWORD)GetWindowLongPtr(hWnd, GWL_STYLE) | WS_OVERLAPPEDWINDOW;
-        _header->exstyle = (DWORD)GetWindowLongPtr(hWnd, GWL_EXSTYLE) | WS_EX_WINDOWEDGE | WS_EX_ACCEPTFILES | WS_EX_LAYERED;
+        _header->exstyle = (DWORD)GetWindowLongPtr(hWnd, GWL_EXSTYLE) | WS_EX_WINDOWEDGE | WS_EX_ACCEPTFILES;
 
         GetWindowRect(_WndInfo.hStatusBar, &rcStatus);
         rcWin = rcContent;
@@ -3074,11 +2974,10 @@ LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         AdjustWindowRectEx(&rcWin, _header->style, ReaderNavigationWindow() ? FALSE : TRUE, _header->exstyle);
 
         SetWindowLongPtr(hWnd, GWL_STYLE, _header->style | WS_CLIPCHILDREN);
-        SetWindowLongPtr(hWnd, GWL_EXSTYLE, _header->exstyle);
+        SetWindowLongPtr(hWnd, GWL_EXSTYLE, ReaderOpaqueExStyle(_header->exstyle));
         SendMessage(hWnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSm); // fixed bug
         ShowWindow(_WndInfo.hStatusBar, SW_SHOW);
         if (!ReaderNavigationWindow()) SetMenu(hWnd, _WndInfo.hMenu);
-        _WndInfo.bLayered = FALSE;
         _WndInfo.status = ds_normal;
         SetWindowPos(hWnd, NULL, rcWin.left, rcWin.top, rcWin.right-rcWin.left, rcWin.bottom-rcWin.top, windowPosFlags);
         CorrectWindowContentRect(hWnd, &rcContent, rcStatus.bottom - rcStatus.top, windowPosFlags);
@@ -3094,7 +2993,7 @@ LRESULT OnHideBorder(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     SendMessage(hWnd, WM_SETREDRAW, TRUE, 0); // lock redraw
     SetReaderFocusMode(_WndInfo.status != ds_normal);
     UpdateReaderLayout(hWnd);
-    // repaint for alpha
+    // Repaint the opaque reading viewport.
     Invalidate(hWnd, FALSE, FALSE);
     return 0;
 }
@@ -3112,7 +3011,7 @@ LRESULT OnFullScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         rc = mi.rcMonitor;
 
         _header->fs_style = (DWORD)GetWindowLongPtr(hWnd, GWL_STYLE);
-        _header->fs_exstyle = (DWORD)GetWindowLongPtr(hWnd, GWL_EXSTYLE);
+        _header->fs_exstyle = ReaderOpaqueExStyle((DWORD)GetWindowLongPtr(hWnd, GWL_EXSTYLE));
         GetWindowPlacement(hWnd, &_header->fs_placement);
 
         if ((WS_MAXIMIZE & _header->fs_style) == WS_MAXIMIZE)
@@ -3124,11 +3023,10 @@ LRESULT OnFullScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         _header->exstyle = (DWORD)GetWindowLongPtr(hWnd, GWL_EXSTYLE) & (~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE));
 
         SetWindowLongPtr(hWnd, GWL_STYLE, _header->style | WS_CLIPCHILDREN);
-        SetWindowLongPtr(hWnd, GWL_EXSTYLE, _header->exstyle);
+        SetWindowLongPtr(hWnd, GWL_EXSTYLE, ReaderOpaqueExStyle(_header->exstyle));
         ShowWindow(_WndInfo.hStatusBar, SW_HIDE);
         SetMenu(hWnd, NULL);
         SetWindowPos(hWnd, NULL, rc.left, rc.top, rc.right-rc.left, rc.bottom-rc.top, SWP_DRAWFRAME);
-        _WndInfo.bLayered = TRUE;
         _WndInfo.status = ds_fullscreen;
     }
     else // exit fullscreen
@@ -3136,17 +3034,15 @@ LRESULT OnFullScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         _header->style = _header->fs_style;
         _header->exstyle = _header->fs_exstyle;
         SetWindowLongPtr(hWnd, GWL_STYLE, _header->style | WS_CLIPCHILDREN);
-        SetWindowLongPtr(hWnd, GWL_EXSTYLE, _header->exstyle);
+        SetWindowLongPtr(hWnd, GWL_EXSTYLE, ReaderOpaqueExStyle(_header->exstyle));
         if ((WS_CAPTION & _header->style) == WS_CAPTION)
         {
             ShowWindow(_WndInfo.hStatusBar, SW_SHOW);
             if (!ReaderNavigationWindow()) SetMenu(hWnd, _WndInfo.hMenu);
-            _WndInfo.bLayered = FALSE;
             _WndInfo.status = ds_normal;
         }
         else
         {
-            _WndInfo.bLayered = TRUE;
             _WndInfo.status = ds_borderless;
             if ((WS_MAXIMIZE & _header->fs_style) == WS_MAXIMIZE)
             {
@@ -3161,7 +3057,7 @@ LRESULT OnFullScreen(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     SendMessage(hWnd, WM_SETREDRAW, TRUE, 0); // lock redraw
     SetReaderFocusMode(_WndInfo.status != ds_normal);
     UpdateReaderLayout(hWnd);
-    // repaint for alpha
+    // Repaint the opaque reading viewport.
     Invalidate(hWnd, FALSE, FALSE);
 
     return 0;
@@ -4070,7 +3966,7 @@ static void _free_resource(HWND hWnd)
         delete _Book;
         _Book = NULL;
     }
-    _readingSurface.Reset(); _frameSurface.Reset();
+    _readingSurface.Reset();
     if(_treePadding) {TreeView_SetImageList(_hTreeView,nullptr,TVSIL_NORMAL);TreeView_SetImageList(_hTreeMark,nullptr,TVSIL_NORMAL);ImageList_Destroy(_treePadding);_treePadding=nullptr;_treePaddingWidth=0;}
     ThemeShutdown();
     DestroyReaderNavigation();
@@ -4120,7 +4016,7 @@ static void _update_data(HWND hWnd, BOOL keep_header, BOOL do_save)
     }
 #endif
     _header->style = (DWORD)GetWindowLongPtr(hWnd, GWL_STYLE);
-    _header->exstyle = (DWORD)GetWindowLongPtr(hWnd, GWL_EXSTYLE);
+    _header->exstyle = ReaderOpaqueExStyle((DWORD)GetWindowLongPtr(hWnd, GWL_EXSTYLE));
 
     // save
     BOOL saved = !do_save || _Cache.save();
@@ -4857,58 +4753,6 @@ void ShowSysTray(HWND hWnd, BOOL bShow)
             Shell_NotifyIcon(NIM_DELETE, &_nid);
         }
     }
-}
-
-HBITMAP CreateAlphaBGColorBitmap(HWND hWnd, COLORREF inColour, int width, int height, BYTE alpha)
-{
-    // Create DC and select font into it
-    HDC hColorDC = CreateCompatibleDC(NULL);
-    HBITMAP hDIB = NULL;
-    BITMAPINFOHEADER BMIH;
-    void *pvBits = NULL;
-    HBITMAP hOldBMP = NULL;
-    BYTE* DataPtr = NULL;
-    BYTE FillR,FillG,FillB;
-    int x,y;
-
-    // Specify DIB setup
-    memset(&BMIH, 0x0, sizeof(BITMAPINFOHEADER));
-    BMIH.biSize = sizeof(BMIH);
-    BMIH.biWidth = width;
-    BMIH.biHeight = height;
-    BMIH.biPlanes = 1;
-    BMIH.biBitCount = 32;
-    BMIH.biCompression = BI_RGB;
-
-    // Create and select DIB into DC
-    hDIB = CreateDIBSection(hColorDC, (LPBITMAPINFO)&BMIH, 0, (LPVOID*)&pvBits, NULL, 0); 
-    hOldBMP = (HBITMAP)SelectObject(hColorDC, hDIB);
-    if (hOldBMP)
-    {
-        DataPtr = (BYTE*)pvBits;
-        FillR = GetRValue(inColour);
-        FillG = GetGValue(inColour);
-        FillB = GetBValue(inColour);
-        for (y = 0; y < BMIH.biHeight; y++)
-        { 
-            for (x = 0; x < BMIH.biWidth; x++)
-            {
-                *DataPtr++ = (FillB * alpha) >> 8; 
-                *DataPtr++ = (FillG * alpha) >> 8; 
-                *DataPtr++ = (FillR * alpha) >> 8;
-                *DataPtr++ = alpha;
-            }
-        }
-
-        // De-select bitmap
-        SelectObject(hColorDC, hOldBMP);
-    }
-
-    // destroy temp DC
-    DeleteDC(hColorDC);
-
-    // Return DIBSection 
-    return hDIB;
 }
 
 // A transparent native image column supplies an internal text gutter. Native

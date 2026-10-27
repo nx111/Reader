@@ -119,10 +119,9 @@ int main(){ReaderCtrlWheel w;
 }
 ''')
 
-    def test_actual_font_zoom_preserves_anchor_point_bounds_dpi_and_body_opacity(self):
+    def test_actual_font_zoom_preserves_anchor_point_bounds_and_dpi(self):
         reader=(ROOT/'Reader/Reader.cpp').read_text()
         font=reader.split('static void ZoomReaderText(HWND hWnd,int steps)\n',1)[1].split('LRESULT OnFontZoomIn',1)[0]
-        alpha=reader.split('static BYTE ReaderBodyAlpha() ',1)[1].split('\n',1)[0]
         self.execute('font',r'''
 #include "ReaderInteraction.h"
 #include <cassert>
@@ -133,10 +132,9 @@ bool _focusMode=false,_panelFromFocus=false,edit=false;int dpi=96,saved=0;
 struct Book{bool loading=false;int index=123456,reset=0,draw=0;bool IsLoading(){return loading;}void ResetLayout(){++reset;}void ReDraw(HWND){++draw;}}book,*_Book=&book;
 bool EC_IsEditMode(){return edit;}int GetWindowDpiCompat(HWND){return dpi;}int MulDiv(int a,int b,int c){long long v=(long long)a*b;return int(v<0?-((-v+c/2)/c):(v+c/2)/c);}
 void Save(HWND){++saved;}
-BYTE ReaderBodyAlpha() '''+alpha+r'''
 static void ZoomReaderText(HWND hWnd,int steps)
 '''+font+r'''
-int main(){for(int scale:{96,120,144,168,192}){dpi=scale;_header->font.lfHeight=-MulDiv(24,dpi,72);for(int i=0;i<200;++i){ZoomReaderText(1,1);ZoomReaderText(1,-1);assert(book.index==123456);}ZoomReaderText(1,10000);assert(abs(_header->font.lfHeight)==MulDiv(72,dpi,72));ZoomReaderText(1,-10000);assert(abs(_header->font.lfHeight)==MulDiv(1,dpi,72));}int before=saved;edit=true;ZoomReaderText(1,1);assert(saved==before);edit=false;book.loading=true;ZoomReaderText(1,1);assert(saved==before);_focusMode=true;assert(ReaderBodyAlpha()==255);_focusMode=false;_panelFromFocus=true;assert(ReaderBodyAlpha()==255);_panelFromFocus=false;assert(ReaderBodyAlpha()==123&&_header->alpha==123);}
+int main(){for(int scale:{96,120,144,168,192}){dpi=scale;_header->font.lfHeight=-MulDiv(24,dpi,72);for(int i=0;i<200;++i){ZoomReaderText(1,1);ZoomReaderText(1,-1);assert(book.index==123456);}ZoomReaderText(1,10000);assert(abs(_header->font.lfHeight)==MulDiv(72,dpi,72));ZoomReaderText(1,-10000);assert(abs(_header->font.lfHeight)==MulDiv(1,dpi,72));}int before=saved;edit=true;ZoomReaderText(1,1);assert(saved==before);edit=false;book.loading=true;ZoomReaderText(1,1);assert(saved==before);}
 ''')
 
     def test_actual_child_rail_layout_focus_minimize_and_repeated_restore(self):
@@ -207,4 +205,5 @@ int main(){InitRail();
         self.assertNotIn('FollowReaderNavigation',reader)
         self.assertNotIn('SetWindowRgn',reader)
         layout=reader.split('static void UpdateReaderLayout(HWND hWnd)\n',1)[1].split('static void SyncCurrentChapter',1)[0]
-        self.assertLess(layout.index('_WndInfo.bLayered='),layout.index('ApplyReaderBodyAlpha(hWnd)'))
+        self.assertIn('ApplyReaderOpaqueWindow(hWnd)',layout)
+        self.assertNotIn('_WndInfo.bLayered',layout)

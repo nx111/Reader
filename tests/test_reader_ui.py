@@ -27,7 +27,7 @@ class PaintBoundaryTests(unittest.TestCase):
         shutil.copy2(ROOT / "tests/reader_paint_compat.h", work / "framework.h")
         reader = (READER / "Reader.cpp").read_text()
         functions = [reader.split("static void SyncCurrentChapter(BOOL reveal)\n",1)[1].split("static void CloseToc",1)[0],
-                     reader.split("LRESULT OnPaint(HWND hWnd, HDC hdc)\n",1)[1].split("VOID OnDraw",1)[0],
+                     reader.split("LRESULT OnPaint(HWND hWnd, HDC hdc)\n",1)[1].split("VOID Invalidate",1)[0],
                      reader.split("VOID Invalidate(HWND hWnd, BOOL bOnlyClient, BOOL bErase)\n",1)[1].split("LRESULT OnSize",1)[0]]
         (work / "reader_paint.inc").write_text("static void SyncCurrentChapter(BOOL reveal)\n"+functions[0]
             +"LRESULT OnPaint(HWND hWnd, HDC hdc)\n"+functions[1]+"VOID Invalidate(HWND hWnd, BOOL bOnlyClient, BOOL bErase)\n"+functions[2]
@@ -81,7 +81,7 @@ class UiSourceContractTests(unittest.TestCase):
         self.assertLess(cancel.index("_splitterDrag.Cancel()"),cancel.index("ReleaseCapture()"))
         self.assertNotIn("Save(",cancel)
 
-    def test_jump_scroll_and_transparent_render_call_chains(self):
+    def test_jump_scroll_and_opaque_render_call_chains(self):
         reader = (READER / "Reader.cpp").read_text()
         page = (READER / "Page.cpp").read_text()
         repaint = page.split("void Page::ReDraw(HWND hWnd)",1)[1].split("int Page::GetPageLength",1)[0]
@@ -94,11 +94,9 @@ class UiSourceContractTests(unittest.TestCase):
         self.assertNotIn("ThemeAttachWindow",menu)
         self.assertIn("WS_CLIPCHILDREN",reader)
         self.assertNotIn("WS_EX_COMPOSITED",reader)
-        layered = reader.split("VOID OnDraw(HWND hWnd)\n",1)[1].split("BOOL ResetLayerd",1)[0]
-        self.assertIn("_frameSurface.Ensure",layered)
-        self.assertIn("UpdateLayeredWindow",layered)
-        self.assertNotIn("CreateCompatibleDC",layered)
-        self.assertNotIn("CreateDIBSection",layered)
+        self.assertNotIn("UpdateLayeredWindow",reader)
+        self.assertNotIn("SetLayeredWindowAttributes",reader)
+        self.assertNotIn("ResetLayerd",reader)
         self.assertIn("m_AlphaSurface.Ensure",page)
         self.assertNotIn("DeleteAlphaTextBitmap",page)
         for name in ("Chapters", "BookMark"):

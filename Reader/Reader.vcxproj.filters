@@ -64,6 +64,9 @@
     <ClInclude Include="ReaderIcons.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="DrawReaderIcon.h"><Filter>Header Files</Filter></ClInclude>
 
+    <ClInclude Include="WindowAppearance.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="ThemePalette.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="GdiSurface.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="Cache.h">

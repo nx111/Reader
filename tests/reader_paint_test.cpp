@@ -16,10 +16,6 @@ struct Settings { int ui_theme = 0, reading_custom = 0, alpha = 255; uint32_t bg
 static Settings settings, *_header = &settings;
 struct Loading { bool enable = false; };
 static Loading* _loading = nullptr;
-struct WindowInfo { bool bLayered = false; };
-static WindowInfo _WndInfo;
-static bool resetLayered = false;
-static int composed = 0, uniform = 0;
 static GdiSurface _readingSurface;
 static HFONT _readerUIFont = &originalFont;
 struct FakeBook
@@ -60,10 +56,6 @@ static void BitBlt(HDC dest,int x,int y,int width,int height,HDC src,int sx,int 
 static void ThemeSetCurrentChapter(HWND, HTREEITEM item) { assert(_syncingToc); shownChapter=(int)item; }
 static void TreeView_SelectItem(HWND, HTREEITEM item) { assert(_syncingToc); selectedChapter=(int)item; ++selections; }
 static void TreeView_EnsureVisible(HWND, HTREEITEM item) { assert(_syncingToc); scroll=(int)item; ++reveals; }
-static BOOL ResetLayerd(HWND) { return resetLayered; }
-static void OnDraw(HWND) { ++composed; }
-static void SetLayeredWindowAttributes(HWND,int,int,int) { ++uniform; }
-static void ApplyReaderBodyAlpha(HWND) { ++uniform; }
 static void InvalidateRect(HWND child,void*,BOOL erase) { assert(!erase); invalidated.push_back(child); }
 static void SyncCurrentChapter(BOOL reveal = FALSE);
 
@@ -132,9 +124,9 @@ static void Dirty()
     for (int i=0;i<200;++i) Invalidate(1,TRUE,TRUE);
     assert(invalidated.size()==200 && std::all_of(invalidated.begin(),invalidated.end(),[](HWND w){return w==_hReadingView;}));
     Invalidate(1,FALSE,FALSE); assert(invalidated.size()==202 && invalidated.back()==1);
-    resetLayered=true; Invalidate(1,TRUE,FALSE); assert(uniform==1);
-    _WndInfo.bLayered=true; auto count=invalidated.size(); Invalidate(1,TRUE,FALSE);
-    assert(composed==1 && invalidated.size()==count);
+    auto count=invalidated.size();Invalidate(1,TRUE,FALSE);
+    assert(invalidated.size()==count+1&&invalidated.back()==_hReadingView);
+
 }
 static void Sync()
 {

@@ -78,6 +78,43 @@ static void Migration()
     assert(Bytes(L"C:\\Reader\\.cache.dat.v1.bak") == original);
 }
 
+
+static void OpaqueMigration()
+{
+    Reset();
+    {
+        Cache seed(L".cache.dat");assert(seed.init());
+        auto book=seed.new_item(L"C:\\books\\keep.txt");int id=book->id;book->index=155;
+        assert(seed.add_mark(book,45));assert(seed.set_mark_note(book,0,L"保留备注"));
+        auto h=seed.get_header();h->item_id=id;h->font.lfHeight=-31;h->bg_color=0x182837;
+        h->font_color=0xe0e1e2;h->line_gap=17;h->sidebar_width=275;h->reading_custom=1;
+        assert(seed.save());
+    }
+    std::string normal=Encoded(Bytes(primary));cJSON* root=cJSON_Parse(normal.c_str());assert(root);
+    cJSON* header=cJSON_GetObjectItem(root,"header");
+    cJSON_SetNumberValue(cJSON_GetObjectItem(header,"alpha"),7);
+    const unsigned originalStyle=0x00080000u|0x20u|0x10u|0x8u;
+    cJSON_SetNumberValue(cJSON_GetObjectItem(header,"exstyle"),originalStyle);
+    cJSON_SetNumberValue(cJSON_GetObjectItem(header,"fs_exstyle"),(originalStyle|0x100u));
+    char* text=cJSON_PrintUnformatted(root);std::string original=Encoded(text);free(text);cJSON_Delete(root);
+    for(const char* fault:{"backup","write","flush","replace",""})
+    {
+        Reset();Put(primary,original);Cache cache(L".cache.dat");assert(cache.init());auto h=cache.get_header();
+        assert(h->alpha==255&&h->exstyle==0x18u&&h->fs_exstyle==0x118u);
+        assert(h->font.lfHeight==-31&&h->bg_color==0x182837&&h->font_color==0xe0e1e2&&h->line_gap==17&&h->sidebar_width==275&&h->reading_custom==1);
+        assert(h->item_count==1&&cache.get_item(0)->index==155&&cache.get_item(0)->mark[0]==45);
+        assert(cache.mark_detail(cache.get_item(0),0).note==L"保留备注");
+        TestFailure=fault;
+        if(*fault){assert(!cache.save());assert(Bytes(primary)==original);TestFailure.clear();}
+        assert(cache.save());assert(Bytes(L"C:\\Reader\\.cache.dat.v5.bak")==original);
+        assert(Bytes(L"C:\\Reader\\.cache.dat.bak")==original);assert(cache.exit());
+        Cache again(L".cache.dat");assert(again.init());assert(again.get_header()->alpha==255);
+        assert(again.get_header()->exstyle==0x18u&&again.get_header()->fs_exstyle==0x118u);
+        assert(again.get_item(0)->index==155&&again.mark_detail(again.get_item(0),0).note==L"保留备注");
+        TestOperations.clear();assert(again.save()&&TestOperations.empty());
+    }
+}
+
 static void Invalid()
 {
     const std::string examples[] = {
@@ -721,7 +758,7 @@ static void BatchBridge()
 int main(int argc, char** argv)
 {
     assert(argc == 2); std::string test = argv[1];
-    if (test == "migration") Migration(); else if (test == "invalid") Invalid();
+    if (test == "opacity") OpaqueMigration(); else if (test == "migration") Migration(); else if (test == "invalid") Invalid();
     else if (test == "identity") Identity(); else if (test == "dedup") Dedup();
     else if (test == "relink") Relink(); else if (test == "persistence") Persistence();
     else if (test == "filters") Filters(); else if (test == "navigation") Navigation();

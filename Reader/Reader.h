@@ -61,7 +61,7 @@ HHOOK               _hKeyboardHook          = NULL;
 #endif
 HWND                _hWnd                   = NULL;
 NOTIFYICONDATA      _nid                    = { 0 };
-BYTE                _textAlpha              = 0xFF;
+extern const BYTE   _textAlpha              = 0xFF; // Fixed bitmap coverage; no opacity control.
 BOOL                _menuInvalid            = FALSE;
 
 
@@ -71,8 +71,6 @@ LRESULT             OnOpenItem(HWND, int, BOOL);
 LRESULT             OnClearFileList(HWND, UINT, WPARAM, LPARAM);
 LRESULT             OnRestoreDefault(HWND, UINT, WPARAM, LPARAM);
 LRESULT             OnPaint(HWND, HDC);
-VOID                OnDraw(HWND);
-BOOL                ResetLayerd(HWND);
 VOID                Invalidate(HWND, BOOL, BOOL);
 LRESULT             OnSize(HWND, UINT, WPARAM, LPARAM);
 // WM_KEYWORD begin
@@ -140,7 +138,6 @@ ULONGLONG           GetDllVersion(LPCTSTR);
 BOOL CALLBACK       EnumWindowsProc(HWND, LPARAM);
 void                ShowInTaskbar(HWND, BOOL);
 void                ShowSysTray(HWND, BOOL);
-HBITMAP             CreateAlphaBGColorBitmap(HWND hWnd, COLORREF inColour, int width, int height, BYTE alpha);
 void                SetTreeviewFont();
 BOOL                LoadResourceImage(LPCWSTR, LPCWSTR, Gdiplus::Bitmap**, HGLOBAL*);
 book_source_t*      FindBookSource(const char* host);

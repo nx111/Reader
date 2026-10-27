@@ -467,7 +467,7 @@ void Page::DrawAlphaText(HDC hdc, char_info_t* p_char, int x, int y, int h, alph
     BYTE *DataPtr;
     BOOL is_tag = FALSE;
     int i,j;
-    extern BYTE _textAlpha;
+    extern const BYTE _textAlpha;
 
     is_tag = p_char->dc_idx >= 2;
 
@@ -570,7 +570,7 @@ void Page::EndDraw(void)
 DWORD Page::GetTextAlpha(DWORD color)
 {
 #if 0
-    extern BYTE _textAlpha;
+    extern const BYTE _textAlpha;
     BYTE r, g, b;
     r = (GetRValue(color) * _textAlpha) >> 8;
     g = (GetGValue(color) * _textAlpha) >> 8;
