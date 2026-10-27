@@ -37,7 +37,7 @@ class FocusUiTests(unittest.TestCase):
         nav=(ROOT/'Reader/NavigationPane.cpp').read_text();reader=(ROOT/'Reader/Reader.cpp').read_text()
         self.assertNotIn('SetTimer',nav);self.assertNotIn('SetLayeredWindowAttributes',nav)
         emphasis=nav.split('void RefreshEmphasis(',1)[1].split('void Position(',1)[0]
-        self.assertIn('ReaderFocusRailEmphasis(clear)',emphasis);self.assertNotIn('UpdateReaderLayout',emphasis);self.assertNotIn('Invalidate(owner',emphasis)
+        self.assertIn('RedrawWindow(pane',emphasis);self.assertNotIn('UpdateReaderLayout',emphasis);self.assertNotIn('Invalidate(owner',emphasis)
         self.assertNotIn('focusExit',nav)
         commands=nav.split('const int commands[]={',1)[1].split('};',1)[0].split(',')
         self.assertEqual(commands.count('IDM_FOCUS'),1);self.assertEqual(commands[5],'IDM_FOCUS')

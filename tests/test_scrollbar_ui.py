@@ -2,7 +2,6 @@
 import os
 from pathlib import Path
 import shlex
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -15,12 +14,13 @@ class ScrollbarUiTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temp=tempfile.TemporaryDirectory(prefix='reader-scrollbars-');cls.addClassCleanup(cls.temp.cleanup)
         cls.work=Path(cls.temp.name)
-        for name in ('FocusRail.cpp','FocusRail.h'):
-            shutil.copy2(ROOT/'Reader'/name,cls.work/name)
-        shutil.copy2(ROOT/'tests/focus_rail_compat.h',cls.work/'framework.h')
-        (cls.work/'Theme.h').write_text('')
-        (cls.work/'windowsx.h').write_text('')
-        cls.flags=[*shlex.split(os.environ.get('CXX','g++')),'-std=c++14','-Wall','-Wextra',*shlex.split(os.environ.get('READER_LIBRARY_TEST_FLAGS','')),'-I'+str(cls.work),'-I'+str(ROOT/'Reader')]
+        nav=(ROOT/'Reader/NavigationPane.cpp').read_text()
+        refresh='void RefreshEmphasis('+nav.split('void RefreshEmphasis(',1)[1].split('void Position(',1)[0]
+        layout='void LayoutReaderNavigation('+nav.split('void LayoutReaderNavigation(',1)[1].split('void ReaderNavigationMenuChanged()',1)[0]
+        theme=(ROOT/'Reader/Theme.cpp').read_text()
+        colors='ReaderPalette ThemeControlPalette('+theme.split('ReaderPalette ThemeControlPalette(',1)[1].split('HBRUSH ThemeWindowBrush()',1)[0]
+        (cls.work/'navigation_paint.inc').write_text(refresh+layout+colors)
+        cls.flags=[*shlex.split(os.environ.get('CXX','g++')),'-std=c++14','-Wall','-Wextra',*shlex.split(os.environ.get('READER_LIBRARY_TEST_FLAGS','')),'-I'+str(cls.work),'-I'+str(ROOT/'Reader'),'-I'+str(ROOT/'tests')]
 
     def execute(self,name,source):
         cpp=self.work/(name+'.cpp');exe=cpp.with_suffix('');cpp.write_text(source)
@@ -139,33 +139,54 @@ static void ZoomReaderText(HWND hWnd,int steps)
 int main(){for(int scale:{96,120,144,168,192}){dpi=scale;_header->font.lfHeight=-MulDiv(24,dpi,72);for(int i=0;i<200;++i){ZoomReaderText(1,1);ZoomReaderText(1,-1);assert(book.index==123456);}ZoomReaderText(1,10000);assert(abs(_header->font.lfHeight)==MulDiv(72,dpi,72));ZoomReaderText(1,-10000);assert(abs(_header->font.lfHeight)==MulDiv(1,dpi,72));}int before=saved;edit=true;ZoomReaderText(1,1);assert(saved==before);edit=false;book.loading=true;ZoomReaderText(1,1);assert(saved==before);_focusMode=true;assert(ReaderBodyAlpha()==255);_focusMode=false;_panelFromFocus=true;assert(ReaderBodyAlpha()==255);_panelFromFocus=false;assert(ReaderBodyAlpha()==123&&_header->alpha==123);}
 ''')
 
-    def test_actual_owned_layered_rail_cutout_move_minimize_disable_restore_lifecycle(self):
+    def test_actual_child_rail_layout_focus_minimize_and_repeated_restore(self):
         self.execute('rail',r'''
-#include "FocusRail.cpp"
-int main(){windows[1]=FakeWindow();windows[2]=FakeWindow();windows[2].parent=1;regionCallback=ReaderFocusRailFollow;
- for(int dpi:{96,120,144,168,192})for(int n=0;n<40;++n){int width=48*dpi/96,height=500*dpi/96;assert(ReaderFocusRailLayout(1,2,width,height,TRUE));assert(windows[2].parent==3&&regions==2);assert(windows[1].alpha==255&&windows[1].region->hole.left==8&&windows[1].region->hole.right==8+width);assert(windows[3].bounds.left==108&&windows[3].bounds.top==230);ReaderFocusRailEmphasis(FALSE);assert(windows[3].alpha==176);ReaderFocusRailEmphasis(TRUE);assert(windows[3].alpha==255);high=true;ReaderFocusRailEmphasis(FALSE);assert(windows[3].alpha==255);high=false;windows[1].bounds.left+=20;windows[1].bounds.right+=20;ReaderFocusRailFollow();assert(windows[3].bounds.left==128&&regions==2);windows[1].iconic=true;ReaderFocusRailFollow();assert(!windows[3].shown);windows[1].iconic=false;windows[1].enabled=false;ReaderFocusRailFollow();assert(windows[3].shown&&!windows[3].enabled);windows[1].enabled=true;ReaderFocusRailLayout(1,2,width,height,FALSE);assert(windows[2].parent==1&&!windows[1].region&&!regions&&!windows[3].shown);windows[1].bounds={100,200,1100,900};}
- ReaderFocusRailDestroy();assert(!regions&&windows[2].parent==1);
+#include "navigation_paint_compat.h"
+#include "navigation_paint.inc"
+int main(){InitRail();
+ for(int scale:{96,120,144,168,192})for(int i=0;i<40;++i){dpi=scale;
+  LayoutReaderNavigation(1000*dpi/96,500*dpi/96,TRUE,FALSE,TRUE);
+  assert(geometry.width==48*dpi/96&&geometry.headerHeight==0&&windows[pane].parent==owner&&anchor==12345);
+  focus=buttons[5];RefreshEmphasis();assert(GetProp(pane,L"ReaderRailClear"));
+  focus=nullptr;foreground=nullptr;windows[owner].iconic=true;RefreshEmphasis();assert(!GetProp(pane,L"ReaderRailClear")&&!IsWindowVisible(pane));
+  windows[owner].iconic=false;foreground=owner;RefreshEmphasis();assert(IsWindowVisible(pane)&&windows[pane].parent==owner);
+  LayoutReaderNavigation(1000*dpi/96,500*dpi/96,TRUE,FALSE,FALSE);
+  assert(geometry.width==176*dpi/96&&geometry.headerHeight==44*dpi/96&&windows[pane].parent==owner&&anchor==12345);
+  for(HWND dirty:dirties)assert(dirty!=owner);dirties.clear();
+ }
 }
 ''')
 
-    def test_actual_transparency_failure_restores_parent_region_and_resources(self):
-        self.execute('rail-failure',r'''
-#include "FocusRail.cpp"
-int main(){windows[1]=FakeWindow();windows[2]=FakeWindow();windows[2].parent=1;regionCallback=ReaderFocusRailFollow;
- for(const char* fault:{"create","layered","region"}){fail=fault;assert(!ReaderFocusRailLayout(1,2,48,500,TRUE));assert(windows[2].parent==1&&!regions&&!windows[1].region);fail.clear();ReaderFocusRailDestroy();}
- assert(ReaderFocusRailLayout(1,2,48,500,TRUE));ReaderFocusRailDestroy();assert(!regions&&windows[2].parent==1);
+    def test_actual_focus_palette_background_hover_custom_colors_and_high_contrast(self):
+        self.execute('rail-colors',r'''
+#include "navigation_paint_compat.h"
+#include "navigation_paint.inc"
+int main(){InitRail();
+ for(int dark:{0,1})for(uint32_t paper:{0u,0xffffffu,0x777777u,0x222222u,0xddddc9u}){
+  palette=MakeReaderPalette(dark);reading.background=paper;
+  LayoutReaderNavigation(1000,500,TRUE,FALSE,TRUE);focus=nullptr;foreground=nullptr;RefreshEmphasis();
+  auto idle=ThemeControlPalette(buttons[5]);assert(idle.window==paper&&idle.surface==paper&&idle.raised==paper);
+  assert(ReaderColorContrast(idle.text,paper)>=2.99&&idle.text!=paper);
+  foreground=owner;focus=buttons[5];RefreshEmphasis();auto clear=ThemeControlPalette(buttons[5]);
+  assert(clear.window==paper&&ReaderColorContrast(clear.text,paper)>=3.99);
+  assert(ReaderColorContrast(clear.text,paper)>=ReaderColorContrast(idle.text,paper));
+  highContrast=true;auto system=ThemeControlPalette(buttons[5]);assert(system.window==GetSysColor(COLOR_WINDOW)&&system.text==GetSysColor(COLOR_WINDOWTEXT)&&system.selected==GetSysColor(COLOR_HIGHLIGHT));highContrast=false;
+  LayoutReaderNavigation(1000,500,TRUE,FALSE,FALSE);auto normal=ThemeControlPalette(buttons[5]);assert(normal.window==palette.window&&normal.text==palette.text);
+ }
 }
 ''')
 
     def test_scroll_strip_preserves_native_accessibility_scope_and_local_paint(self):
-        scroll=(ROOT/'Reader/Scrollbar.cpp').read_text();rail=(ROOT/'Reader/FocusRail.cpp').read_text()
+        scroll=(ROOT/'Reader/Scrollbar.cpp').read_text();rail=(ROOT/'Reader/NavigationPane.cpp').read_text()
         for forbidden in ('ShowScrollBar','SetWindowLongPtr(window,GWL_STYLE','WM_NCCALCSIZE','InvalidateRect(GetParent','RDW_ALLCHILDREN','WS_EX_TRANSPARENT'):
             self.assertNotIn(forbidden,scroll)
         for required in ('GetScrollBarInfo','GetScrollInfo','STATE_SYSTEM_INVISIBLE','AccessibleObjectFromWindow','LresultFromObject','WM_MOUSEWHEEL','WM_NCDESTROY','KillTimer','WM_CANCELMODE','HighContrast','std::shared_ptr<Host> keep'):
             self.assertIn(required,scroll)
-        for required in ('WS_EX_LAYERED','WS_EX_TOOLWINDOW','WS_EX_NOACTIVATE','SetParent(pane,host)','CombineRgn(region,region,cut,RGN_DIFF)','SetWindowRgn(owner','IsIconic','EnableWindow(host','SetParent(pane,owner)'):
-            self.assertIn(required,rail)
-        self.assertNotIn('WS_EX_TRANSPARENT',rail)
+        for forbidden in ('WS_EX_LAYERED','WS_EX_TOOLWINDOW','SetParent(','SetWindowRgn','CreateRectRgn','ReaderFocusRailHost'):
+            self.assertNotIn(forbidden,rail)
+        self.assertFalse((ROOT/'Reader/FocusRail.cpp').exists());self.assertFalse((ROOT/'Reader/FocusRail.h').exists())
+        for project in ('Reader.vcxproj','Reader.vcxproj.filters'):
+            self.assertNotIn('FocusRail.',(ROOT/'Reader'/project).read_text())
         self.assertIn('ReaderScrollbarsUpdate(viewport)',(ROOT/'Reader/PdfBook.cpp').read_text())
         update=(ROOT/'Reader/PdfBook.cpp').read_text().split('void PdfBook::UpdateScrollbars(HWND viewport)',1)[1]
         self.assertIn('SIF_DISABLENOSCROLL',update);self.assertNotIn('ShowScrollBar',update)
@@ -183,6 +204,7 @@ int main(){windows[1]=FakeWindow();windows[2]=FakeWindow();windows[2].parent=1;r
         self.assertIn('else ZoomReaderText(hWnd,steps)',wheel);self.assertIn('if(steps)',wheel)
         self.assertIn('message->wParam==VK_TAB && ReaderNavigationContains',nav)
         self.assertIn('!ReaderNavigationContains(message->hwnd)',nav)
-        self.assertIn('FollowReaderNavigation();return result',reader)
+        self.assertNotIn('FollowReaderNavigation',reader)
+        self.assertNotIn('SetWindowRgn',reader)
         layout=reader.split('static void UpdateReaderLayout(HWND hWnd)\n',1)[1].split('static void SyncCurrentChapter',1)[0]
         self.assertLess(layout.index('_WndInfo.bLayered='),layout.index('ApplyReaderBodyAlpha(hWnd)'))

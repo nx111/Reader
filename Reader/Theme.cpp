@@ -477,7 +477,20 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 const ReaderPalette& ThemeColors() { return palette; }
 ReaderPalette ThemeControlPalette(HWND window)
 {
-    // Real desktop alpha belongs to the separate rail host, not paint mixing.
+    for(HWND ancestor=window;ancestor;ancestor=GetParent(ancestor))
+        if(GetProp(ancestor,L"ReaderFocusRail"))
+        {
+            HIGHCONTRAST high={};high.cbSize=sizeof(high);
+            bool highContrast=SystemParametersInfo(SPI_GETHIGHCONTRAST,sizeof(high),&high,0)&&(high.dwFlags&HCF_HIGHCONTRASTON);
+            ReaderPalette base=palette;
+            if(highContrast)
+            {
+                base.window=base.surface=base.raised=base.hover=base.pressed=GetSysColor(COLOR_WINDOW);
+                base.text=base.muted=base.accent=GetSysColor(COLOR_WINDOWTEXT);base.disabled=GetSysColor(COLOR_GRAYTEXT);
+                base.selected=GetSysColor(COLOR_HIGHLIGHT);base.selectedText=GetSysColor(COLOR_HIGHLIGHTTEXT);base.border=GetSysColor(COLOR_WINDOWFRAME);
+            }
+            return ReaderFocusPalette(base,reading.background,GetProp(ancestor,L"ReaderRailClear")!=nullptr,highContrast);
+        }
     return palette;
 }
 HBRUSH ThemeWindowBrush() { return windowBrush; }

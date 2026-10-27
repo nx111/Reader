@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <initializer_list>
+#include <cmath>
 
 inline uint32_t ThemeRgb(unsigned r, unsigned g, unsigned b) { return r | (g << 8) | (b << 16); }
 struct ReaderPalette
@@ -27,6 +28,37 @@ inline uint32_t ReaderBlendColor(uint32_t foreground,uint32_t background,unsigne
     alpha=alpha>255?255:alpha;unsigned result=0;
     for(unsigned shift:{0u,8u,16u}) result|=((((foreground>>shift)&255)*alpha+((background>>shift)&255)*(255-alpha)+127)/255)<<shift;
     return result;
+}
+inline double ReaderColorLight(uint32_t color)
+{
+    double light=0;const double weights[]={0.2126,0.7152,0.0722};
+    for(int i=0;i<3;++i) {double c=((color>>(i*8))&255)/255.0;light+=weights[i]*(c<=0.04045?c/12.92:std::pow((c+0.055)/1.055,2.4));}
+    return light;
+}
+inline double ReaderColorContrast(uint32_t a,uint32_t b)
+{double x=ReaderColorLight(a),y=ReaderColorLight(b);return x>y?(x+0.05)/(y+0.05):(y+0.05)/(x+0.05);}
+inline uint32_t ReaderReadableBlend(uint32_t ink,uint32_t paper,unsigned alpha,double contrast)
+{
+    for(;alpha<255;alpha=(alpha>247?255:alpha+8))
+    {uint32_t color=ReaderBlendColor(ink,paper,alpha);if(ReaderColorContrast(color,paper)>=contrast) return color;}
+    return ink;
+}
+// Opaque local paint only. The focus rail shares the reader's effective solid
+// background and changes ink contrast without any window alpha or reparenting.
+inline ReaderPalette ReaderFocusPalette(ReaderPalette p,uint32_t paper,bool clear,bool highContrast=false)
+{
+    if(highContrast) return p;
+    uint32_t ink=p.text;
+    if(ReaderColorContrast(ink,paper)<4.0)
+    {uint32_t dark=ThemeRgb(16,17,20),light=ThemeRgb(246,247,249);ink=ReaderColorContrast(dark,paper)>ReaderColorContrast(light,paper)?dark:light;}
+    p.window=p.surface=p.raised=paper;
+    p.text=ReaderReadableBlend(ink,paper,clear?216:136,clear?4.0:3.0);
+    p.muted=p.text;p.disabled=ReaderBlendColor(ink,paper,64);
+    p.hover=ReaderBlendColor(ink,paper,clear?24:14);p.pressed=ReaderBlendColor(ink,paper,clear?36:22);
+    p.border=ReaderBlendColor(ink,paper,clear?32:16);p.accent=p.text;
+    p.selected=ReaderBlendColor(ink,paper,clear?40:24);
+    p.selectedText=ReaderReadableBlend(ink,p.selected,clear?216:136,clear?4.0:3.0);
+    return p;
 }
 struct ReaderScrollColors { uint32_t background,track,thumb,hot,pressed; };
 inline ReaderScrollColors ReaderScrollbarColors(const ReaderPalette& p,uint32_t background)

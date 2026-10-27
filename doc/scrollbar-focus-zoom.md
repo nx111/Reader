@@ -1,4 +1,4 @@
-# 隐藏滚动条、专注栏桌面透明与 Ctrl 滚轮
+# 隐藏滚动条、应用内专注配色与 Ctrl 滚轮
 
 基线 `19fab82d760ecfd2cc19c0001799b6c4814e909b`。包含顶部退出去重调整；实现阶段没有手动触发 CI，发布构建须按准确提交单独核验。未增加第三方依赖、网络请求或缓存格式。
 
@@ -14,17 +14,17 @@
 
 PDF／导航在修改原生范围后主动同步条带。PDF 打开期间固定保留两轴非客户区度量，用 `SIF_DISABLENOSCROLL` 保持范围为空时的宽度，空轨仅画背景，防止临界适宽时增删竖条导致反复重排；离开 PDF 后取消这些度量。悬停和淡出不调用 `ShowScrollBar`。
 
-## 真实专注栏透明
+## 应用内专注配色（按最新要求替代桌面透明）
 
-此前颜色淡化已移除。`FocusRail.cpp` 建立同线程、同 DPI 感知上下文的 owned `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE` 宿主，将已有导航 pane 及原生按钮整体迁入。宿主的背景和按钮一起使用真实窗口 alpha：静置 176／255，悬停、焦点、菜单、捕获或系统高对比度时 255。
+后续修正基于 `9f44deef80b7fe93f4b3f210c80314b062dbe6e4`。已移除 `FocusRail.cpp/.h`、对应工程项和 owned layered 宿主／region 挖孔／reparent／跟随逻辑。导航 pane 始终是主窗内的普通 child，原生父子窗口生命周期负责最小化、显隐、焦点与销毁；不再存在专注浮窗或独立 alpha。
 
-仅把子控件半透明仍会看到主窗，因此主窗 region 用 `RGN_DIFF` 排除这块已预留的 48 DIP 客户区，桌面／后方应用才可进入合成。正文继续由独立阅读子窗绘制，专注期间主窗 alpha 强制 255（在全屏／无边框最终绘制状态确定后应用，避免过渡状态跳过设置）；用户原先配置的窗口 alpha 不改写，退出专注后恢复。不存在截图背景伪装、色键或 `WS_EX_TRANSPARENT` 点击穿透。
+旧宿主和 region 只属于旧进程，不存入缓存；正常关闭旧版本即销毁其 HWND，新版本重启不继承它们。新实现不会挖孔，也不盲目重置其他用途的窗口 region。普通 EXE 更新需要关闭／重新启动程序，不是运行时热替换。
 
-宿主跟随主窗位置／大小／可见／最小化／禁用状态，owned tool window 不另占任务栏；窗口管理命令转回主窗。坐标使用客户区屏幕原点与窗口边界换算，标题栏不在透明区域内。纯移动只移动宿主，region 只在相对形状／大小改变时更新；强调改变仅更新宿主 alpha。退出／API 失败回退／销毁时恢复 pane 的父窗与原 region，正确转移／释放 region 所有权。退出前先清除 active，避免 `SetWindowRgn` 同步位置消息重新挖孔。宿主和 pane 同步 UI state，导航焦点、Alt／F10、Tab、快捷键、菜单和 Esc 明确接受这个 owned 窗口层级。
+专注使用有效阅读底色 `reading.background`，栏的 window／surface／raised 背景与其一致。图标、文字、边界、选中、悬停和按下均在此底色上混色；针对自定义浅／深／中灰背景选择可读前景。静置图标／文字最低对比目标 3:1，悬停／焦点增强到 4:1；系统高对比模式实时取系统 Window／Text／Highlight 等颜色，不做弱化。阅读背景图片仍由原正文路径绘制，栏使用底色，不截取其他应用或正文像素。
 
-API 失败时安全恢复普通不透明原生栏，不将混色当作桌面透明。当前没有 Windows 桌面，因此上述是已实现且经过 API 替身验证的合成路径；**没有实测后方应用像素、DWM 阴影／窗口圆角、AltTab／置顶／多屏移动、跨屏 DPI、全屏／无边框、模态焦点或闪烁**。
+悬停、键盘焦点、菜单或捕获改变强调时只重画 pane 及子控件，不移动正文、不重新分页、不调整窗口 alpha。无边框和全屏沿用相同 child 布局，专注宽度仍为 48 DIP。顶部重复退出和 44 DIP 头部占位不恢复；列表中的“退出专注，固定侧栏（Esc）”、F8／Esc、目录状态和阅读锚点恢复均保留。
 
-顶部重复退出按钮及 44 DIP 占位已删除；列表中的“退出专注，固定侧栏（Esc）”和原 F8／Esc 保留。临时目录、侧栏宽度和正文锚点恢复逻辑沿用原实现。
+用户显式整窗透明度配置没有删除或改写：专注及其临时面板期间继续使用现有 alpha 255 保护，使左栏和正文不透外部应用；退出专注后恢复用户原设置。非专注时若用户主动设置整窗半透明，仍按其偏好生效，这不是左栏独立透出机制。
 
 ## Ctrl＋滚轮
 
@@ -34,10 +34,10 @@ API 失败时安全恢复普通不透明原生栏，不将混色当作桌面透�
 
 ## 检查与 Windows 复核
 
-本轮最终重跑 **99／99 通过，ASan／UBSan 99／99 通过**（LSan 关闭，预编译 PDFium 本身未重编 sanitizer）。正常／无网络各 **26／26** 翻译单元通过 MinGW 语法／API 类型检查，两种配置资源编译通过，项目 XML 与差异空白检查通过；这些不能代替 MSVC 链接或 Windows 桌面测试。
+本轮修正全量 **99／99** 和 ASan／UBSan **99／99** 通过；正常／无网络配置各 **25／25** 翻译单元语法／API 类型检查通过，高对比度收尾后 Theme.cpp 两种配置另行复验通过。两种配置资源编译、项目 XML 和差异检查通过。LSan 关闭，预编译 PDFium 本身未重编 sanitizer；这些不代替 MSVC 链接或 Windows 桌面测试。
 
-全量 99 项：原有 89 项（修订专注透明语义）＋新增 10 项。新增检查执行生产透明宿主和文字缩放桥接、原生 tracking 转发，覆盖 100–200% DPI 几何、32 位范围、命中、hover／capture／fade、重复拖动／进入退出、API 失败与同步 region 事件重入、Ctrl 余量／边界／作用域／anchor 及正文 opacity。独立执行真实 PDFium 核心；窗口／GDI／桌面部分使用替身，不是 Windows GUI。
+全量 99 项：原有 89 项（修订专注透明语义）＋新增 10 项。检查执行生产导航布局／强调刷新／palette 选择、文字缩放桥接和原生 tracking 转发，覆盖 100–200% DPI 几何、32 位范围、命中、hover／capture／fade、重复拖动／进入退出、原生 child 父窗不变／最小化与焦点恢复、浅深和自定义背景、高对比、无 owned layered／region 创建、Ctrl 余量／边界／作用域／anchor 及正文 opacity。独立执行真实 PDFium 核心；窗口／GDI／桌面部分使用替身，不是 Windows GUI。
 
-Windows 实机复核应覆盖：默认隐藏和横纵交汇、长目录与虚拟列表、原生拖动／键盘／触摸／UIA、高对比度切换；任意应用作背景时左栏透出、正文保持不透明且不点穿；AltTab／模态／最小化／置顶与多屏 DPI；文字和 PDF 快速正反缩放及切书，确认锚点不漂移。CI 和构建包须以实际发布提交对应的运行单独核验，不将实现阶段的替身测试算作 Windows 验收。
+Windows 实机复核应覆盖：默认隐藏和横纵交汇、长目录与虚拟列表、原生拖动／键盘／触摸／UIA、高对比度切换；专注栏匹配阅读底色且不透外部应用、正文保持不透明；显式整窗透明偏好恢复；AltTab／模态／最小化／置顶与多屏 DPI；文字和 PDF 快速正反缩放及切书，确认锚点不漂移。CI 和构建包须以实际发布提交对应的运行单独核验，不将实现阶段的替身测试算作 Windows 验收。
 
-实现依据：[GetScrollBarInfo](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getscrollbarinfo)、[WM_VSCROLL 的 32 位范围说明](https://learn.microsoft.com/en-us/windows/win32/controls/wm-vscroll)、[Layered／owned windows](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features)、[SetWindowRgn 坐标、同步消息与所有权](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowrgn)、[SetParent 与 UI state／DPI](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setparent)。
+实现依据：[GetScrollBarInfo](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getscrollbarinfo)、[WM_VSCROLL 的 32 位范围说明](https://learn.microsoft.com/en-us/windows/win32/controls/wm-vscroll)。

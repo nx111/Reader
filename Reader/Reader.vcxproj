@@ -178,7 +178,6 @@
     <ClInclude Include="ReadingState.h" />
     <ClInclude Include="Scrollbar.h" />
     <ClInclude Include="ScrollbarModel.h" />
-    <ClInclude Include="FocusRail.h" />
     <ClInclude Include="Theme.h" />
     <ClInclude Include="BookmarkActions.h" />
     <ClInclude Include="BookmarkExport.h" />
@@ -244,7 +243,6 @@
     <ClCompile Include="PdfEngine.cpp" />
     <ClCompile Include="NavigationPane.cpp" />
     <ClCompile Include="Scrollbar.cpp" />
-    <ClCompile Include="FocusRail.cpp" />
     <ClCompile Include="Theme.cpp" />
     <ClCompile Include="Reader.cpp" />
     <ClCompile Include="tagset.cpp" />

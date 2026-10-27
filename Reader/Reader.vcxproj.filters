@@ -51,9 +51,6 @@
     <ClInclude Include="ScrollbarModel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="FocusRail.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Theme.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="BookmarkActions.h" />
     <ClInclude Include="BookmarkExport.h" />
@@ -141,9 +138,6 @@
     <ClCompile Include="PdfEngine.cpp" />
     <ClCompile Include="NavigationPane.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Scrollbar.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FocusRail.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Theme.cpp"><Filter>Source Files</Filter></ClCompile>

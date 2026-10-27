@@ -8,7 +8,6 @@ HWND ReaderNavigationWindow();
 HMENU ReaderMenuHandle(HWND owner);
 void LayoutReaderNavigation(int width, int height, BOOL visible, BOOL panel, BOOL focus = FALSE);
 void RefreshReaderNavigationEmphasis();
-void FollowReaderNavigation();
 BOOL ReaderNavigationForeground();
 BOOL ReaderNavigationKeyboardActive();
 void LeaveReaderNavigation();

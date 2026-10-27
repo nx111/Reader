@@ -2,7 +2,6 @@
 #include "NavigationLayout.h"
 #include "ReaderInteraction.h"
 #include "Scrollbar.h"
-#include "FocusRail.h"
 #include "DPIAwareness.h"
 #include "Theme.h"
 #include "DrawReaderIcon.h"
@@ -33,8 +32,9 @@ void RefreshEmphasis(HWND moved=nullptr)
     POINT mouse;GetCursorPos(&mouse);RECT bounds;GetWindowRect(pane,&bounds);
     bool clear=ReaderRailClear(focusMode,ReaderNavigationForeground()!=FALSE,PtInRect(&bounds,mouse)!=FALSE,
         ReaderNavigationContains(GetFocus())!=FALSE,tracking||finishing,ReaderNavigationContains(GetCapture())!=FALSE);
+    bool previous=GetProp(pane,L"ReaderRailClear")!=nullptr;
     if(clear) SetProp(pane,L"ReaderRailClear",(HANDLE)1);else RemoveProp(pane,L"ReaderRailClear");
-    ReaderFocusRailEmphasis(clear);
+    if(clear!=previous) RedrawWindow(pane,nullptr,nullptr,RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_NOERASE);
 }
 void Position(HWND child,int x,int y,int width,int height)
 {
@@ -197,9 +197,8 @@ LRESULT CALLBACK PaneProc(HWND window,UINT message,WPARAM wParam,LPARAM lParam)
 } // namespace
 HMENU ReaderMenuHandle(HWND window) {HMENU menu=(HMENU)GetProp(window,L"ReaderMainMenu");return menu?menu:GetMenu(window);}
 HWND ReaderNavigationWindow() {return pane;}
-BOOL ReaderNavigationContains(HWND window) {return window && pane && (window==pane || IsChild(pane,window) || ReaderFocusRailContains(window));}
-BOOL ReaderNavigationForeground() {return GetForegroundWindow()==owner || ReaderFocusRailContains(GetForegroundWindow());}
-void FollowReaderNavigation() {ReaderFocusRailFollow();}
+BOOL ReaderNavigationContains(HWND window) {return window && pane && (window==pane || IsChild(pane,window));}
+BOOL ReaderNavigationForeground() {return GetForegroundWindow()==owner;}
 BOOL ReaderNavigationTracking() {return tracking || finishing;}
 void ReaderNavigationMenuClosed() {finishing=false;RefreshEmphasis();}
 void RefreshReaderNavigationEmphasis() {RefreshEmphasis();}
@@ -234,7 +233,6 @@ void LayoutReaderNavigation(int width,int height,BOOL visible,BOOL panel,BOOL fo
     if(focusMode) SetProp(pane,L"ReaderFocusRail",(HANDLE)1);else RemoveProp(pane,L"ReaderFocusRail");
     Fonts(GetWindowDpiCompat(owner));auto next=ReaderNavigationLayout(width,height,dpi,visible!=FALSE,panel!=FALSE,focusMode);
     bool changed=modeChanged || next.compact!=geometry.compact;geometry=next;
-    ReaderFocusRailLayout(owner,pane,geometry.width,height,focusMode);
     Position(pane,0,0,geometry.width,height);Position(viewport,0,geometry.headerHeight,geometry.width-1,geometry.viewportHeight);
     for(int i=0;i<7;++i) {if(geometry.compact) SetProp(buttons[i],L"ReaderCompact",(HANDLE)1);else RemoveProp(buttons[i],L"ReaderCompact");if(changed) InvalidateRect(buttons[i],NULL,FALSE);}
     Scroll(scrollPosition);
@@ -304,7 +302,6 @@ BOOL ReaderNavigationSystemMenu(WPARAM wParam,LPARAM lParam)
 void CancelReaderNavigation() {closing=true;altGesture.Cancel();if(tracking) EndMenu();else Leave(false);}
 void DestroyReaderNavigation()
 {
-    ReaderFocusRailDestroy();
     closing=true;if(tracking) EndMenu();if(pane) DestroyWindow(pane);pane=viewport=tips=NULL;
     if(font) DeleteObject(font);if(headingFont) DeleteObject(headingFont);font=headingFont=NULL;
     if(root) {RemoveProp(owner,L"ReaderMainMenu");DestroyMenu(root);root=NULL;}

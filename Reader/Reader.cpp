@@ -598,9 +598,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (!wParam) { _focusEscapeLatched=FALSE; _ctrlWheel.Reset(); CancelReaderNavigation(); }
         RefreshReaderNavigationEmphasis();PostMessage(hWnd,WM_READER_NAVIGATION_REFRESH,0,0);
         return DefWindowProc(hWnd,message,wParam,lParam);
-    case WM_WINDOWPOSCHANGED:
-    case WM_ENABLE:
-        {LRESULT result=DefWindowProc(hWnd,message,wParam,lParam);FollowReaderNavigation();return result;}
     case WM_CANCELMODE:
         _ctrlWheel.Reset();CancelReaderNavigation(); CancelSplitter(hWnd); return 0;
     case WM_READER_LIBRARY_VIEW:

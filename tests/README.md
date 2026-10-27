@@ -194,25 +194,25 @@ Geometry/palette checks cover a permanent 48-DIP rail without a duplicate header
 exit, one named focus-toggle command, header-free scrolling, activation/focus/menu/capture,
 light/dark contrast and 100–200% DPI padding with narrow-column clamps. Source
 contracts preserve native text/hit/scroll bounds, local repaint and the absence of
-edge/hide timers. The later owned desktop-alpha implementation supersedes the
-old rail paint blend; focus body opacity is explicitly preserved. Focus cases run with
+edge/hide timers. The rail is an opaque app child sharing the effective reading background;
+focus body opacity is explicitly preserved. Focus cases run with
 ASan/UBSan (LSan off).
 These are not Windows GUI, touch, screen-reader or actual DPI/flicker tests; see
 [the implementation and Windows checklist](../doc/focus-rail-padding.md).
 
-## Hidden scrollbars, desktop focus transparency and Ctrl wheel
+## Hidden scrollbars, in-app focus colors and Ctrl wheel
 
 ```sh
 python -m unittest discover -s tests -p 'test_scrollbar_ui.py' -v
 ```
 
-Ten additional cases bring the current suite to **99 tests**. Production
-`FocusRail.cpp`, text zoom and native tracking forwarding execute against small
-Win32 substitutes; scrollbar range/visibility/palette/wheel helpers execute
+Ten additional cases bring the current suite to **99 tests**. Production navigation layout/emphasis/palette selection, text zoom and native
+tracking forwarding execute against small Win32 substitutes; scrollbar range/visibility/palette/wheel helpers execute
 directly. Cases cover 32-bit limits, native thumb hit bounds, fade/reentry/capture,
-200 repeated drags and region/parent restores, synchronous region-event reentry,
-API failure, 100–200% DPI, point bounds, fractional deltas, scope, book switches,
-unchanged text anchors and opaque focus body. Both configurations now check 26
+200 repeated drags and focus switches, unchanged native parent,
+minimize/focus restoration, background matching/high contrast, no owned window or
+region creation, 100–200% DPI, point bounds, fractional deltas, scope, book switches,
+unchanged text anchors and opaque focus body. Both configurations now check 25
 translation units, plus resource compilation. No Windows desktop, native tracking,
 UIA/screen reader, touch, DWM pixels, AltTab or actual flicker has been run here.
 See [implementation and runtime checklist](../doc/scrollbar-focus-zoom.md).
