@@ -3,6 +3,8 @@
 #include "Keyset.h"
 #include "LibraryModel.h"
 #include "ReadingState.h"
+#include "ReaderText.h"
+#include "cJSON.h"
 #include <iostream>
 
 std::map<std::wstring, TestFile> TestFiles;
@@ -47,7 +49,7 @@ static void Migration()
 {
     Reset(); const std::string original = Encoded(Legacy()); Put(primary, original);
     Cache cache(L".cache.dat"); assert(cache.init());
-    assert(cache.get_header()->cache_schema == 2 && cache.get_header()->next_item_id == 4);
+    assert(cache.get_header()->cache_schema == CACHE_SCHEMA_VERSION && cache.get_header()->next_item_id == 4);
     assert(cache.get_header()->item_id == 1);
     assert(cache.get_header()->font.lfHeight == -21);
     for (int i = 0; i < 3; ++i)
@@ -62,7 +64,7 @@ static void Migration()
     assert(cache.save());
     assert(Bytes(L"C:\\Reader\\.cache.dat.v1.bak") == original);
     assert(Bytes(L"C:\\Reader\\.cache.dat.bak") == original);
-    assert(Encoded(Bytes(primary)).find("\"schema_version\":2") != std::string::npos);
+    assert(Encoded(Bytes(primary)).find("\"schema_version\":" + std::to_string(CACHE_SCHEMA_VERSION)) != std::string::npos);
     assert(TestOperations[0] == "write" && TestOperations[1] == "flush");
     assert(cache.exit());
     Cache loaded(L".cache.dat"); assert(loaded.init());
@@ -77,7 +79,7 @@ static void Migration()
 static void Invalid()
 {
     const std::string examples[] = {
-        "{", "{}", R"({"schema_version":3,"header":{"item_count":0}})",
+        "{", "{}", R"({"schema_version":4,"header":{"item_count":0}})",
         R"({"schema_version":2.5,"header":{"item_count":0}})",
         R"({"header":{"item_count":1},"items":[]})",
         R"({"header":{"item_count":-1}})",
@@ -188,6 +190,14 @@ static void Persistence()
 
 static void Filters()
 {
+    assert(LibraryKey('A', true, true, false) == library_key_select_all);
+    assert(LibraryKey('A', true, false, false) == library_key_none);
+    assert(LibraryKey(46, false, true, false) == library_key_remove);
+    assert(LibraryKey(46, false, false, false) == library_key_none); // Delete in the filter edits text only.
+    assert(LibraryKey(13, false, true, false) == library_key_open);
+    assert(LibraryKey(27, false, true, true) == library_key_cancel);
+    assert(LibraryKey(27, false, true, false) == library_key_close);
+    assert(LibraryKey(9, false, false, false) == library_key_none);
     item_t item = {}; wcscpy(item.title, L"测试 Reader"); wcscpy(item.author, L"作者 Alice"); wcscpy(item.file_name, L"C:\\books\\测试.AZW3");
     assert(LibraryMatches(item, false, library_all, L"READER"));
     assert(LibraryMatches(item, false, library_all, L"测试"));
@@ -218,6 +228,16 @@ static void Filters()
 
 static void Navigation()
 {
+    assert(ReaderOpenResultIsCurrent(7, 7));
+    assert(!ReaderOpenResultIsCurrent(8, 7));
+    assert(!ReaderOpenResultIsCurrent(0, 7));
+    assert(!ReaderOpenResultIsCurrent(0, 0));
+    ReaderProgressObservation observed;
+    assert(observed.MarkRead(1, 99, true, true));
+    assert(!observed.MarkRead(1, 99, true, true)); // Repaint after an explicit unread action preserves that state.
+    assert(observed.MarkRead(1, 100, true, true));
+    assert(!observed.MarkRead(2, 100, false, true));
+    assert(!observed.MarkRead(3, 0, true, true));
     ReadingHistory h;
     ReadingAnchor a(7, 0, 20), b(7, 1, 500), c(7, 3, 1500), live(7, 3, 1530), target;
     h.Record(a, b); h.Record(b, c);
@@ -275,19 +295,124 @@ static void Large()
     assert(cache.get_by_id(id)->index == 932);
 }
 
+static void BookmarkMetadata()
+{
+    Reset(); Cache cache(L".cache.dat"); assert(cache.init());
+    int id = cache.new_item(L"C:\\book.web")->id;
+    bookmark_detail_t first(2, 10); first.title = L"第二章"; first.summary = L"Chinese 中文 summary";
+    assert(cache.add_mark(cache.get_by_id(id), 10, &first));
+    assert(!cache.add_mark(cache.get_by_id(id), 10, &first));
+    bookmark_detail_t second(4, 10); second.title = L"第四章"; second.summary = L"另一章节同一位置";
+    assert(cache.add_mark(cache.get_by_id(id), 10, &second));
+    assert(cache.add_mark(cache.get_by_id(id), 10)); // A raw legacy location is distinct.
+    cache.rebase_marks(cache.get_by_id(id), 5, 100);
+    assert(cache.get_by_id(id)->mark[0] == 10 && cache.get_by_id(id)->mark[1] == 10);
+    assert(cache.get_by_id(id)->mark[2] == 110 && cache.mark_detail(cache.get_by_id(id), 2).chapter == -1);
+    assert(cache.save());
+    Cache restored(L".cache.dat"); assert(restored.init());
+    auto item = restored.get_by_id(id);
+    assert(restored.mark_detail(item, 0).title == L"第二章" && restored.mark_detail(item, 1).chapter == 4);
+    assert(restored.mark_detail(item, 0).summary == first.summary);
+    assert(restored.del_mark(item, 0));
+    assert(item->mark_size == 2 && restored.mark_detail(item, 0).chapter == 4);
+    assert(restored.save());
+    Cache reloaded(L".cache.dat"); assert(reloaded.init());
+    assert(reloaded.mark_detail(reloaded.get_by_id(id), 0).summary == second.summary);
+    int other = reloaded.new_item(L"C:\\duplicate.web")->id;
+    bookmark_detail_t moved(8, 0); moved.title = L"第八章"; moved.summary = L"开头";
+    assert(reloaded.add_mark(reloaded.get_by_id(other), 0, &moved));
+    assert(reloaded.relink_item(id, L"C:\\duplicate.web"));
+    item = reloaded.get_by_id(id);
+    assert(item->mark_size == 3 && reloaded.mark_detail(item, 2).chapter == 8);
+    assert(reloaded.mark_detail(item, 2).summary == moved.summary);
+    std::string version2 = Encoded(Bytes(primary));
+    const std::string currentVersion = "\"schema_version\":" + std::to_string(CACHE_SCHEMA_VERSION);
+    size_t versionAt = version2.find(currentVersion); assert(versionAt != std::string::npos);
+    version2.replace(versionAt, currentVersion.size(), "\"schema_version\":2");
+    Reset(); Put(primary, Encoded(version2));
+    Cache previous(L".cache.dat"); assert(previous.init());
+    assert(previous.get_by_id(id) && previous.mark_detail(previous.get_by_id(id), 0).chapter == 4);
+    assert(previous.save() && Bytes(L"C:\\Reader\\.cache.dat.v2.bak") == Encoded(version2));
+    Reset(); Put(primary, Encoded(Legacy()));
+    Cache legacy(L".cache.dat"); assert(legacy.init());
+    assert(legacy.mark_detail(legacy.get_by_id(1), 0).chapter == -1);
+    assert(legacy.mark_detail(legacy.get_by_id(1), 0).summary.empty());
+}
+
+static void BookmarkInvalid()
+{
+    Reset(); Cache cache(L".cache.dat"); assert(cache.init());
+    auto item = cache.new_item(L"C:\\book.web");
+    bookmark_detail_t detail(3, 10); detail.title = L"title"; detail.summary = L"summary";
+    assert(cache.add_mark(item, 10, &detail) && cache.save());
+    const std::string saved = Encoded(Bytes(primary));
+    for (int kind = 0; kind < 6; ++kind)
+    {
+        cJSON* root = cJSON_Parse(saved.c_str());
+        cJSON* array = cJSON_GetObjectItem(root, "bookmark_details");
+        cJSON* mark = cJSON_GetArrayItem(array, 0);
+        if (kind == 0) cJSON_SetNumberValue(cJSON_GetObjectItem(mark, "position"), 11);
+        if (kind == 1) cJSON_SetNumberValue(cJSON_GetObjectItem(mark, "mark_index"), 100);
+        if (kind == 2) cJSON_SetNumberValue(cJSON_GetObjectItem(mark, "book_id"), 999);
+        if (kind == 3) cJSON_SetNumberValue(cJSON_GetObjectItem(mark, "chapter"), -2);
+        if (kind == 4) cJSON_AddItemToArray(array, cJSON_Duplicate(mark, TRUE));
+        if (kind == 5) cJSON_ReplaceItemInObject(mark, "summary", cJSON_CreateString(std::string(250, 'x').c_str()));
+        char* json = cJSON_PrintUnformatted(root); std::string damaged = Encoded(json); free(json); cJSON_Delete(root);
+        Put(primary, damaged);
+        Cache invalid(L".cache.dat"); assert(!invalid.init()); assert(Bytes(primary) == damaged);
+    }
+}
+
+static void Batch()
+{
+    Reset(); Cache cache(L".cache.dat"); assert(cache.init());
+    std::vector<int> ids;
+    for (int i = 0; i < 10000; ++i) ids.push_back(cache.new_item((L"C:\\books\\" + std::to_wstring(i) + L".txt").c_str())->id);
+    auto active = cache.get_by_id(ids[5]); active->index = 123; cache.add_mark(active, 17);
+    assert(LibraryApplyState(*active, 1, 2));
+    assert(!LibraryApplyState(*active, 1, 2));
+    assert(LibraryApplyState(*active, -1, 0));
+    assert(active->index == 123 && active->mark[0] == 17 && active->favorite == 1);
+    assert(!LibraryApplyState(*active, -2, 7));
+    std::vector<int> selected;
+    for (size_t i = 0; i < ids.size(); i += 2) selected.push_back(ids[i]);
+    selected.push_back(ids[0]); selected.push_back(-1); // A selection snapshot can contain a stale ID.
+    cache.open_item(ids[5]);
+    assert(cache.delete_items(selected) == 5000);
+    assert(cache.get_by_id(ids[5])->index == 123 && cache.get_by_id(ids[5])->mark[0] == 17);
+    assert(cache.get_header()->item_id == ids[5] && cache.get_header()->item_count == 5000);
+    assert(cache.get_item(0)->id == ids[5]);
+    assert(cache.delete_items(selected) == 0 && cache.get_header()->item_count == 5000);
+    assert(TestFiles.empty()); // Removing original books never performs filesystem deletion.
+    assert(cache.new_item(L"C:\\new.txt")->id > ids.back());
+}
+
 namespace Bridge {
 enum { book_text, book_online, book_web };
-struct Chapter { int index; };
+static int destroyed = 0, saves = 0;
+struct Chapter {
+    int index, size; std::wstring title;
+    Chapter(int p, int length = 0, const std::wstring& name = L"") : index(p), size(length), title(name) {}
+};
+typedef std::vector<Chapter> chapters_t;
 struct StubBook
 {
     int* position = NULL;
     header_t* header = NULL;
     int type = book_text, chapter = 0, request = -1;
     bool loading = false, asynchronous = false;
+    std::wstring text = std::wstring(1000, L'x'), filename;
+    int highlight = -1, highlightLength = 0;
     std::vector<Chapter> chapters = { {0}, {100}, {300} };
+    ~StubBook() { ++destroyed; }
     void Rebind(int* p, header_t* h) { position = p; header = h; }
     void SetChapterRule(chapter_rule_t*) {}
-    void SetFileName(const wchar_t*) {}
+    void SetSearchHighlight(int p, int n) { highlight = p; highlightLength = n; }
+    void SetFileName(const wchar_t* path) { filename = path; }
+    const wchar_t* GetFileName() { return filename.c_str(); }
+    wchar_t* GetText() { return &text[0]; }
+    int GetTextLength() { return (int)text.size(); }
+    void GetChapterTitle(wchar_t* out, int count) { wcsncpy(out, chapters[chapter].title.c_str(), count - 1); out[count - 1] = 0; }
     bool IsLoading() { return loading; }
     int GetBookType() { return type; }
     int GetCurChapterIndex()
@@ -320,10 +445,24 @@ static HWND _readerButtons[8] = {};
 static ReadingHistory _readingHistory, _replayHistory;
 static ReadingAnchor _jumpOrigin, _restoreAnchor;
 static BOOL _jumpPending = FALSE, _restorePending = FALSE, _replaying = FALSE;
+static unsigned long long _documentRevision = 1;
+static HWND _hWnd = NULL;
 static BOOL EC_IsEditMode() { return FALSE; }
+static void EC_LeaveEditMode() {}
 static BOOL EnableWindow(HWND, BOOL) { return TRUE; }
+static void StopAutoPage(HWND) {}
+static void StopLoadingImage(HWND) {}
+static void OnUpdateChapters(HWND) {}
+static void OnUpdateBookMark(HWND) {}
+static void SaveLibrary() { ++saves; }
+static void Save(HWND) { ++saves; }
+static void LibraryChanged() {}
+static void UpdateTitle(HWND) {}
+static void Invalidate(HWND, BOOL, BOOL) {}
+static void InvalidateReadingText() { ++_documentRevision; }
 static void FinishReadingJump();
 static void PrepareReadingJump(HWND);
+#include "SearchDlg.h"
 #include "reader_bridges.inc"
 
 static void Import()
@@ -376,6 +515,52 @@ static void NavigationBridge()
     assert(_item->mark_size == 1 && _item->mark[0] == 7);
     _Book = NULL;
 }
+
+static void SearchBridge()
+{
+    Reset(); assert(_Cache.init());
+    _activeBookId = _Cache.new_item(L"C:\\reading.txt")->id;
+    StubBook book; _Book = &book; RebindReadingCache();
+    book.text.replace(12, 3, L"hit"); book.text.replace(150, 3, L"hit"); book.text.replace(350, 3, L"hit");
+    book.chapters = { {0, 100, L"第一章"}, {100, 200, L"第二章"}, {300, 700, L"第三章"} };
+    reader_search_source_t source;
+    assert(CaptureReaderSearch(&source) && source.base == 0 && source.text.size() == 1000 && source.token.chapter == -1);
+    auto matches = ReaderFindAll(source.text, L"hit", true, []() { return false; }); assert(matches.count == 3);
+    assert(ActivateReaderSearch(source.token, 12, 3) && _item->index == 12 && book.highlightLength == 3);
+    book.type = book_online; book.chapter = 1;
+    assert(CaptureReaderSearch(&source) && source.base == 100 && source.text.size() == 200 && source.token.chapter == 1);
+    matches = ReaderFindAll(source.text, L"hit", true, []() { return false; }); assert(matches.count == 1 && matches.positions[0] == 50);
+    assert(!ActivateReaderSearch(source.token, 12, 3)); // Never jump outside the stated current-chapter scope.
+    assert(ActivateReaderSearch(source.token, 150, 3));
+    book.chapter = -1; assert(!CaptureReaderSearch(&source)); book.chapter = 1;
+    ReaderSearchToken old = source.token; ++_documentRevision;
+    assert(!ActivateReaderSearch(old, 150, 3));
+    assert(CaptureReaderSearch(&source)); old = source.token; book.chapter = 2;
+    assert(!ActivateReaderSearch(old, 150, 3));
+    book.loading = true; assert(!CaptureReaderSearch(&source)); book.loading = false;
+    book.type = book_web; book.chapters = { {-1}, {-1}, {0, 1000, L"Web 当前章"} };
+    assert(CaptureReaderSearch(&source) && source.token.chapter == 2 && source.base == 0);
+    assert(source.scope.find(L"当前章") != std::wstring::npos);
+    _Book = NULL;
+}
+
+static void BatchBridge()
+{
+    Reset(); assert(_Cache.init()); destroyed = 0;
+    _activeBookId = _Cache.new_item(L"C:\\active.txt")->id;
+    int other = _Cache.new_item(L"C:\\other.txt")->id;
+    _Book = new StubBook; RebindReadingCache(); _item->index = 55;
+    assert(RemoveLibraryBooks(std::vector<int>(1, other)) == 1 && destroyed == 0);
+    assert(_Book->position == &_Cache.get_by_id(_activeBookId)->index && *_Book->position == 55);
+    SetLibraryBooksState(std::vector<int>(1, _activeBookId), 1, 2);
+    assert(_item->favorite == 1 && _item->read_state == 2 && _item->index == 55);
+    std::vector<int> selected(1, _activeBookId);
+    assert(RemoveLibraryBooks(selected) == 1 && !_Book && destroyed == 1);
+    assert(RemoveLibraryBooks(selected) == 0 && destroyed == 1);
+    int loading = _Cache.new_item(L"C:\\loading.epub")->id;
+    _Book = new StubBook; _Book->loading = true; _Book->SetFileName(L"C:\\loading.epub");
+    assert(RemoveLibraryBooks(std::vector<int>(1, loading)) == 1 && !_Book && destroyed == 2);
+}
 } // namespace Bridge
 
 int main(int argc, char** argv)
@@ -388,6 +573,9 @@ int main(int argc, char** argv)
     else if (test == "geometry") Geometry(); else if (test == "large") Large();
     else if (test == "import_bridge") Bridge::Import();
     else if (test == "navigation_bridge") Bridge::NavigationBridge();
+    else if (test == "bookmark_metadata") BookmarkMetadata(); else if (test == "bookmark_invalid") BookmarkInvalid();
+    else if (test == "batch") Batch(); else if (test == "search_bridge") Bridge::SearchBridge();
+    else if (test == "batch_bridge") Bridge::BatchBridge();
     else return 2;
     std::cout << test << " passed\n";
 }

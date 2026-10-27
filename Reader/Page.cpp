@@ -35,6 +35,7 @@ Page::Page()
     , m_BlankPage(TRUE)
     , m_ChapterStart(0)
     , m_ChapterLength(0)
+    , m_SearchStart(-1), m_SearchLength(0)
 {
     memset(&m_PageInfo, 0, sizeof(page_info_t));
 }
@@ -231,7 +232,17 @@ void Page::DrawPage(HWND hWnd, HDC hdc, RECT* rc, BOOL enable_alpha)
             else
             {
                 SelectFontByDcIndex(hdc, p_char->dc_idx);
+                bool match = m_SearchStart >= 0 && p_char->idx >= m_SearchStart && p_char->idx - m_SearchStart < m_SearchLength;
+                COLORREF previousColor = 0, previousBackground = 0;
+                int previousMode = 0;
+                if (match)
+                {
+                    previousColor = SetTextColor(hdc, RGB(0, 0, 0));
+                    previousBackground = SetBkColor(hdc, RGB(255, 230, 110));
+                    previousMode = SetBkMode(hdc, OPAQUE);
+                }
                 TextOut(hdc, x, y + (p_line->cy - p_char->cy), &m_Text[p_char->idx], 1);
+                if (match) { SetTextColor(hdc, previousColor); SetBkColor(hdc, previousBackground); SetBkMode(hdc, previousMode); }
             }
             x += p_char->cx + CHAR_GAP;
         }
@@ -491,6 +502,8 @@ void Page::DrawAlphaText(HDC hdc, char_info_t* p_char, int x, int y, int h, alph
         FillR = GetRValue(m_dcList[p_char->dc_idx].TextColor);
         FillG = GetGValue(m_dcList[p_char->dc_idx].TextColor);
         FillB = GetBValue(m_dcList[p_char->dc_idx].TextColor);
+        if (m_SearchStart >= 0 && p_char->idx >= m_SearchStart && p_char->idx - m_SearchStart < m_SearchLength)
+        { FillR = 255; FillG = 96; FillB = 0; }
     }
 
     // draw text

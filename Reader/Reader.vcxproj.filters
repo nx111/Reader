@@ -39,6 +39,9 @@
     <ClInclude Include="BooksourceDlg.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SearchDlg.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ReaderText.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="BookmarkData.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="LibraryDlg.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="LibraryModel.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ReadingState.h"><Filter>Header Files</Filter></ClInclude>
@@ -107,6 +110,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="SearchDlg.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="LibraryDlg.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="Reader.cpp">
       <Filter>Source Files</Filter>

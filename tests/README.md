@@ -72,7 +72,7 @@ verified**. Do not interpret that run as a LeakSanitizer pass.
 python -m unittest discover -s tests -p 'test_library_state.py' -v
 ```
 
-The 12 library tests compile production `Cache.cpp`/`Jsondata.cpp` with bundled
+The 17 library tests compile production `Cache.cpp`/`Jsondata.cpp` with bundled
 cJSON and fault-injectable Win32 substitutes. They also compile the actual
 reader import/rebinding and reading-navigation bridge functions, plus the
 production filter/sort/history/geometry helpers. Coverage includes encoded v1
@@ -80,7 +80,10 @@ migration, unchanged order/marks/unknown dates, corrupt/future/partial caches,
 backup/flush/replace failure retry, external writers, stable IDs after reorder or
 clear, path/file-ID deduplication, relink collision merging/capacity rollback,
 Unicode search, sorting, 20,000 entries, live reader rebinding and asynchronous
-chapter-return failure rollback. Geometry is checked at 96/120/144/192 DPI.
+chapter-return failure rollback. Geometry is checked at 96/120/144/192 DPI. Additional tests cover v2-to-v3
+backup, sparse chapter/summary persistence, malformed metadata, batch state
+idempotence and compaction, active/loading book cancellation, actual local vs
+current-online-chapter search scope, stale result rejection, and keyboard roles.
 
 ```sh
 READER_LIBRARY_TEST_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
@@ -104,3 +107,20 @@ Use `--compiler /path/to/x86_64-w64-mingw32-g++` and, if needed,
 include both networking configurations of all changed translation units.
 `-fpermissive`, temporary header-name aliases and an MSVC-style `max()` adapter
 accommodate existing MSVC-specific source; they do not certify MSVC linkage.
+
+## Search and text excerpts
+
+```sh
+python -m unittest discover -s tests -p 'test_reader_text.py' -v
+```
+
+Seven tests compile the production literal search/excerpt/request-gate/key
+helpers. They cover exact counts with bounded display rows, empty/no results,
+Unicode and case behavior, UTF-16 excerpt boundaries, cancellation with zero or
+many hits and long terms, duplicate/stale requests, chapter labels and native
+keyboard role dispatch. `READER_LIBRARY_TEST_FLAGS` also enables sanitizers for
+this harness. These checks do not simulate actual Windows control focus, GDI
+highlight pixels, screen readers, or display scaling.
+
+The full current portable suite is 44 tests: 20 existing format/parser tests,
+17 cache/library/production-bridge tests, and 7 search/text tests.

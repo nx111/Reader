@@ -23,7 +23,7 @@ class LibraryStateTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         work = Path(cls.temp.name)
         for name in ["Cache.cpp", "Cache.h", "Jsondata.cpp", "Jsondata.h", "types.h",
-                     "Keyset.h", "Utils.h", "Upgrade.h", "DPIAwareness.h", "LibraryModel.h", "ReadingState.h"]:
+                     "Keyset.h", "Utils.h", "Upgrade.h", "DPIAwareness.h", "LibraryModel.h", "ReadingState.h", "BookmarkData.h", "SearchDlg.h", "ReaderText.h"]:
             shutil.copy2(ROOT / "Reader" / name, work / name)
         # POSIX exposes overloads for strcasestr; the untouched Windows declaration
         # is unused by these tests and cannot coexist with that host declaration.
@@ -33,10 +33,14 @@ class LibraryStateTests(unittest.TestCase):
         (work / "shlwapi.h").write_text("#pragma once\n")
         reader = (ROOT / "Reader" / "Reader.cpp").read_text()
         binding = reader.split("static void RebindReadingCache()\n", 1)[1].split("void OpenLibraryBook", 1)[0]
-        navigation = reader.split("static ReadingAnchor CurrentReadingAnchor()\n", 1)[1].split("BOOL GetReadingRect", 1)[0]
+        navigation = reader.split("static ReadingAnchor CurrentReadingAnchor()\n", 1)[1].split("static void NavigateBookmark(", 1)[0]
+        search = reader.split("static ReaderSearchToken CurrentSearchToken()\n", 1)[1].split("void ClearReaderSearchHighlight()", 1)[0]
+        batch = reader.split("int RemoveLibraryBooks(const std::vector<int>& ids)\n", 1)[1].split("BOOL RelinkLibraryBook", 1)[0]
         (work / "reader_bridges.inc").write_text(
             "static void RebindReadingCache()\n" + binding
-            + "static ReadingAnchor CurrentReadingAnchor()\n" + navigation)
+            + "static ReadingAnchor CurrentReadingAnchor()\n" + navigation
+            + "static ReaderSearchToken CurrentSearchToken()\n" + search
+            + "int RemoveLibraryBooks(const std::vector<int>& ids)\n" + batch)
         source = ROOT / "opensrc" / "cjson"
         cls.executable = work / "library-test"
         flags = shlex.split(os.environ.get("READER_LIBRARY_TEST_FLAGS", ""))
@@ -88,6 +92,21 @@ class LibraryStateTests(unittest.TestCase):
 
     def test_production_navigation_bridge_restores_and_rolls_back_failed_fetch(self):
         self.run_case("navigation_bridge")
+
+    def test_bookmark_metadata_roundtrip_rebase_relink_and_old_cache(self):
+        self.run_case("bookmark_metadata")
+
+    def test_invalid_bookmark_metadata_never_overwrites_cache(self):
+        self.run_case("bookmark_invalid")
+
+    def test_batch_state_is_idempotent_and_removal_preserves_files_and_anchors(self):
+        self.run_case("batch")
+
+    def test_production_search_scope_and_stale_result_rejection(self):
+        self.run_case("search_bridge")
+
+    def test_production_batch_rebind_and_loading_book_cancellation(self):
+        self.run_case("batch_bridge")
 
 
 if __name__ == "__main__":

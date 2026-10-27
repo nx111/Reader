@@ -59,7 +59,7 @@ def main():
         if args.network:
             flags.append("-DENABLE_NETWORK")
         failed = False
-        for name in ("Reader", "Cache", "Jsondata", "LibraryDlg", "Page", "WebBook", "Editctrl",
+        for name in ("Reader", "Book", "Cache", "Jsondata", "LibraryDlg", "SearchDlg", "Page", "WebBook", "Editctrl",
                      "Advset", "DPIAwareness", "EpubBook", "HtmlParser"):
             result = subprocess.run([compiler, *flags, str(source / (name + ".cpp"))],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

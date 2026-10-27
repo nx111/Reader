@@ -8,12 +8,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
+#include <set>
 #include <shlwapi.h>
 
 extern VOID GetCacheVersion(TCHAR*);
 
 Cache::Cache(const TCHAR* file)
-    : m_buffer(NULL), m_size(0), m_capacity(0), m_jsonbak(NULL), m_jsonlen(0), m_needsMigration(FALSE)
+    : m_buffer(NULL), m_size(0), m_capacity(0), m_jsonbak(NULL), m_jsonlen(0), m_needsMigration(FALSE), m_loadedSchema(CACHE_SCHEMA_VERSION)
 {
     m_file_name[0] = 0;
     GetModuleFileName(NULL, m_file_name, MAX_PATH);
@@ -38,12 +39,12 @@ BOOL Cache::init()
     default_header(defaults);
     int schema = 0;
     const BOOL ok = !memchr(decoded, 0, length)
-        && parser_json(decoded, defaults, &m_buffer, &m_size, &schema);
+        && parser_json(decoded, defaults, &m_buffer, &m_size, &schema, &m_bookmarks);
     free(decoded); free(defaults);
     if (!ok) { free(encoded); return FALSE; } // Never replace a corrupt/future cache with defaults.
     m_capacity = m_size;
     m_jsonbak = encoded; m_jsonlen = length;
-    m_needsMigration = schema < CACHE_SCHEMA_VERSION;
+    m_needsMigration = schema < CACHE_SCHEMA_VERSION; m_loadedSchema = schema;
     rebuild_indexes();
     return TRUE;
 }
@@ -53,12 +54,13 @@ BOOL Cache::exit()
     const BOOL ok = !m_buffer || save();
     free(m_buffer); m_buffer = NULL; m_size = m_capacity = 0;
     free(m_jsonbak); m_jsonbak = NULL; m_jsonlen = 0;
+    m_bookmarks.clear(); m_paths.clear(); m_keys.clear(); m_rows.clear();
     return ok;
 }
 
 BOOL Cache::save()
 {
-    char* json = create_json(get_header());
+    char* json = create_json(get_header(), &m_bookmarks);
     if (!json) return FALSE;
     const int size = (int)strlen(json);
     if (size > 128 * 1024 * 1024) { create_json_free(json); return FALSE; }
@@ -72,7 +74,7 @@ BOOL Cache::save()
             // Update the snapshot only after durable replacement. A failed write must be retried.
             free(m_jsonbak); m_jsonbak = json; m_jsonlen = size;
             json = NULL; // Transfer the encoded buffer; no fallible allocation after commit.
-            m_needsMigration = FALSE;
+            m_needsMigration = FALSE; m_loadedSchema = CACHE_SCHEMA_VERSION;
         }
     }
     create_json_free(json);
@@ -195,15 +197,27 @@ item_t* Cache::open_item(int id)
 
 BOOL Cache::delete_item(int id)
 {
-    item_t* item = get_by_id(id);
-    if (!item) return FALSE;
-    const int row = m_rows[id];
-    const int remaining = get_header()->item_count - row - 1;
-    if (remaining) memmove(item, item + 1, remaining * sizeof(item_t));
-    --get_header()->item_count; m_size -= sizeof(item_t);
-    if (get_header()->item_id == id) get_header()->item_id = -1;
+    return delete_items(std::vector<int>(1, id)) == 1;
+}
+
+int Cache::delete_items(const std::vector<int>& ids)
+{
+    if (!get_header() || ids.empty()) return 0;
+    const std::set<int> selected(ids.begin(), ids.end());
+    const int count = get_header()->item_count;
+    int next = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        item_t* item = get_item(i);
+        if (selected.count(item->id)) { m_bookmarks.erase(item->id); continue; }
+        if (next != i) memcpy(get_item(next), item, sizeof(item_t));
+        ++next;
+    }
+    get_header()->item_count = next;
+    if (selected.count(get_header()->item_id)) get_header()->item_id = -1;
+    m_size = sizeof(header_t) + next * sizeof(item_t);
     rebuild_indexes();
-    return TRUE;
+    return count - next;
 }
 
 BOOL Cache::delete_all_item()
@@ -211,6 +225,7 @@ BOOL Cache::delete_all_item()
     if (!get_header()) return FALSE;
     get_header()->item_count = 0; get_header()->item_id = -1;
     m_size = sizeof(header_t);
+    m_bookmarks.clear();
     rebuild_indexes(); // next_item_id deliberately survives clearing.
     return TRUE;
 }
@@ -221,6 +236,8 @@ BOOL Cache::relink_item(int id, const TCHAR* file_name, const TCHAR* key)
     item_t* source = get_by_id(id);
     if (!source || !canonical_path(file_name, full)) return FALSE;
     item_t merged = *source;
+    std::vector<bookmark_detail_t> records;
+    for (int i = 0; i < source->mark_size; ++i) records.push_back(mark_detail(source, i));
     item_t* other = find_item(full, key);
     int duplicate = other && other->id != id ? other->id : -1;
     if (duplicate >= 0)
@@ -229,13 +246,16 @@ BOOL Cache::relink_item(int id, const TCHAR* file_name, const TCHAR* key)
         for (int i = 0; i <= other->mark_size; ++i)
         {
             const int mark = i == other->mark_size ? other->index : other->mark[i];
-            if (mark == 0 || mark == merged.index) continue;
+            bookmark_detail_t detail = i == other->mark_size ? bookmark_detail_t(-1, mark) : mark_detail(other, i);
+            if (i == other->mark_size && (mark == 0 || mark == merged.index)) continue;
             bool found = false;
-            for (int j = 0; j < merged.mark_size; ++j) if (merged.mark[j] == mark) found = true;
+            for (int j = 0; j < merged.mark_size; ++j)
+                if (merged.mark[j] == mark && records[j].chapter == detail.chapter) found = true;
             if (!found)
             {
                 if (merged.mark_size == MAX_MARK_COUNT) return FALSE; // Do not drop any marks.
                 merged.mark[merged.mark_size++] = mark;
+                records.push_back(detail);
             }
         }
         merged.favorite |= other->favorite;
@@ -249,6 +269,7 @@ BOOL Cache::relink_item(int id, const TCHAR* file_name, const TCHAR* key)
     merged.file_key[0] = 0;
     if (key) _tcsncpy(merged.file_key, key, 63);
     *get_by_id(id) = merged;
+    m_bookmarks[id].swap(records);
     rebuild_indexes();
     return TRUE;
 }
@@ -404,41 +425,59 @@ void Cache::default_header(header_t* header)
 #endif
 }
 
-BOOL Cache::add_mark(item_t *item, int value)
+bookmark_detail_t Cache::mark_detail(const item_t* item, int index) const
 {
-    int i;
+    if (!item || index < 0 || index >= item->mark_size) return bookmark_detail_t();
+    bookmark_store_t::const_iterator found = m_bookmarks.find(item->id);
+    if (found != m_bookmarks.end() && index < (int)found->second.size()
+        && found->second[index].position == item->mark[index]) return found->second[index];
+    return bookmark_detail_t(-1, item->mark[index]);
+}
 
-    if (!item)
-        return FALSE;
-    if (item->mark_size >= MAX_MARK_COUNT)
-        return FALSE;
-    for (i=0; i<item->mark_size; i++)
-    {
-        if (value == item->mark[i])
-            return FALSE;
-    }
-    item->mark[item->mark_size] = value;
-    item->mark_size++;
+BOOL Cache::add_mark(item_t* item, int value, const bookmark_detail_t* detail)
+{
+    if (!item || value < 0 || item->mark_size >= MAX_MARK_COUNT) return FALSE;
+    bookmark_detail_t added = detail ? *detail : bookmark_detail_t(-1, value);
+    added.position = value;
+    if (added.chapter < -1 || added.title.size() > 255 || added.summary.size() > 199) return FALSE;
+    for (int i = 0; i < item->mark_size; ++i)
+        if (value == item->mark[i] && mark_detail(item, i).chapter == added.chapter) return FALSE;
+    std::vector<bookmark_detail_t> records;
+    for (int i = 0; i < item->mark_size; ++i) records.push_back(mark_detail(item, i));
+    records.push_back(added);
+    m_bookmarks[item->id].swap(records);
+    item->mark[item->mark_size++] = value;
     return TRUE;
 }
 
-BOOL Cache::del_mark(item_t *item, int index)
+BOOL Cache::del_mark(item_t* item, int index)
 {
-    if (!item)
-        return FALSE;
-    if (item->mark_size <= 0)
-        return FALSE;
-    if (index < 0 || index >= item->mark_size)
-        return FALSE;
-
-    // delete
+    if (!item || index < 0 || index >= item->mark_size) return FALSE;
+    std::vector<bookmark_detail_t> records;
+    for (int i = 0; i < item->mark_size; ++i) if (i != index) records.push_back(mark_detail(item, i));
     if (item->mark_size - index - 1 > 0)
-    {
-        memmove(item->mark+index, item->mark+index+1, (item->mark_size-index-1)*sizeof(int));
-    }
-    item->mark_size--;
-    item->mark[item->mark_size] = 0;
+        memmove(item->mark + index, item->mark + index + 1, (item->mark_size - index - 1) * sizeof(int));
+    item->mark[--item->mark_size] = 0;
+    m_bookmarks[item->id].swap(records);
     return TRUE;
+}
+
+void Cache::rebase_marks(item_t* item, int start, int delta)
+{
+    if (!item) return;
+    std::vector<bookmark_detail_t> records;
+    for (int i = 0; i < item->mark_size; ++i)
+    {
+        bookmark_detail_t detail = mark_detail(item, i);
+        if (detail.chapter < 0 && item->mark[i] >= start)
+        {
+            long long moved = (long long)item->mark[i] + delta;
+            item->mark[i] = (int)(std::max)(0LL, (std::min)((long long)INT_MAX, moved));
+            detail.position = item->mark[i];
+        }
+        records.push_back(detail);
+    }
+    m_bookmarks[item->id].swap(records);
 }
 
 BOOL Cache::move_item(int from, int to)
@@ -481,7 +520,7 @@ BOOL Cache::write(void* data, int size)
     _stprintf(temp, _T("%s.tmp"), m_file_name);
     _stprintf(backup, _T("%s.bak"), m_file_name);
     _stprintf(backupTemp, _T("%s.bak.tmp"), m_file_name);
-    _stprintf(legacy, _T("%s.v1.bak"), m_file_name);
+    _stprintf(legacy, _T("%s.v%d.bak"), m_file_name, m_loadedSchema);
     HANDLE file = CreateFile(temp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) return FALSE;
     DWORD written = 0;

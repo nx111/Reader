@@ -10,7 +10,7 @@
 #define ASSERT(x)
 #endif
 
-#define CACHE_SCHEMA_VERSION       2
+#define CACHE_SCHEMA_VERSION       3
 #define MAX_LIBRARY_ITEMS          100000
 
 #define IDM_LIBRARY                 46001

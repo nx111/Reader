@@ -8,12 +8,15 @@
 
 #define MAX_BLANK_LINE      2
 
+static volatile LONG s_OpenSequence = 0;
+
 Book::Book()
     : m_Data(NULL)
     , m_Size(0)
     , m_hThread(NULL)
     , m_bForceKill(FALSE)
     , m_Rule(NULL)
+    , m_OpenToken(0)
 {
     memset(m_fileName, 0, sizeof(m_fileName));
     m_Chapters.clear();
@@ -34,6 +37,7 @@ BOOL Book::OpenBook(HWND hWnd)
     param = (ob_thread_param_t *)malloc(sizeof(ob_thread_param_t));
     param->_this = this;
     param->hWnd = hWnd;
+    param->token = m_OpenToken = (UINT)InterlockedIncrement(&s_OpenSequence);
     m_hThread = (HANDLE)_beginthreadex(NULL, 0, OpenBookThread, param, 0, &threadID);
     return TRUE;
 }
@@ -50,6 +54,7 @@ BOOL Book::OpenBook(char *data, int size, HWND hWnd)
     param = (ob_thread_param_t *)malloc(sizeof(ob_thread_param_t));
     param->_this = this;
     param->hWnd = hWnd;
+    param->token = m_OpenToken = (UINT)InterlockedIncrement(&s_OpenSequence);
     m_hThread = (HANDLE)_beginthreadex(NULL, 0, OpenBookThread, param, 0, &threadID);
     return TRUE;
 }
@@ -492,7 +497,7 @@ unsigned __stdcall Book::OpenBookThread(void* pArguments)
     result = _this->ParserBook(param->hWnd);
     if (param->hWnd && !_this->m_bForceKill)
     {
-        PostMessage(param->hWnd, WM_OPEN_BOOK, result ? 1 : 0, NULL);
+        PostMessage(param->hWnd, WM_OPEN_BOOK, result ? 1 : 0, (LPARAM)param->token);
     }
     free(param);
     CloseHandle(_this->m_hThread);

@@ -85,6 +85,7 @@ public:
     BOOL OpenBook(char *data, int size, HWND hWnd);
     BOOL CloseBook(void);
     virtual BOOL IsLoading(void);
+    UINT GetOpenToken() const { return m_OpenToken; }
     void SetFileName(const TCHAR *fileName);
     TCHAR * GetFileName(void);
     wchar_t * GetText(void);
@@ -122,12 +123,14 @@ protected:
     HANDLE m_hThread;
     BOOL m_bForceKill;
     chapter_rule_t *m_Rule;
+    UINT m_OpenToken;
 };
 
 typedef struct ob_thread_param_t
 {
     Book *_this;
     HWND hWnd;
+    UINT token;
 } ob_thread_param_t;
 
 #endif

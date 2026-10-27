@@ -3,6 +3,26 @@
 #include <algorithm>
 #include <vector>
 
+inline bool ReaderOpenResultIsCurrent(unsigned current, unsigned received)
+{
+    return current != 0 && current == received;
+}
+
+class ReaderProgressObservation
+{
+    unsigned token;
+    int position;
+    bool observed;
+public:
+    ReaderProgressObservation() : token(0), position(0), observed(false) {}
+    bool MarkRead(unsigned bookToken, int index, bool local, bool lastPage)
+    {
+        bool changed = !observed || token != bookToken || position != index;
+        token = bookToken; position = index; observed = true;
+        return changed && index > 0 && local && lastPage;
+    }
+};
+
 // Reading locations are independent of library row order and permanent marks.
 struct ReadingAnchor
 {

@@ -3,7 +3,7 @@ A Win32 text, EPUB, Mobipocket/Kindle and online file reader
 
 ## 本地书库与阅读导航
 
-支持批量索引原文件、失联记录重新关联、搜索筛选排序、可折叠联动目录、返回／前进导航；保留旧进度和书签并备份迁移缓存。`Ctrl+L` 打开书库，`Ctrl+T` 切换目录，`F8` 专注。详见 [使用与迁移说明](doc/library-usability.md)。
+支持批量索引原文件、失联记录重新关联、搜索筛选排序、多选管理、正文搜索结果与高亮、书签章名和摘要、可折叠联动目录、返回／前进导航；保留旧进度和书签并备份迁移缓存。`Ctrl+L` 打开书库，`Ctrl+T` 切换目录，`F8` 专注。详见 [使用与迁移说明](doc/library-usability.md)。
 
 ## 本地电子书格式支持
 - 支持 TXT、EPUB，以及现有 libmobi 可解析的无 DRM MOBI / KF8 容器：`.mobi`、`.azw3`、`.azw`、`.prc`。

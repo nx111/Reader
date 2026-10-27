@@ -21,6 +21,7 @@ using DWORD = uint32_t; using UINT = unsigned; using LONG = int32_t;
 using HWND = void*; using HANDLE = void*; using HFONT = void*;
 using HDC = void*; using HMENU = void*; using WPARAM = uintptr_t; using LPARAM = intptr_t;
 using LRESULT = intptr_t; using INT_PTR = intptr_t;
+struct MSG;
 #define CALLBACK
 #define __stdcall
 #define TRUE 1

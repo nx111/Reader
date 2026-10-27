@@ -14,5 +14,7 @@ BOOL IsLibraryBookFile(const TCHAR* path);
 void ImportLibraryEntries(const std::vector<item_t>& entries);
 void OpenLibraryBook(int id);
 BOOL RemoveLibraryBook(int id);
+int RemoveLibraryBooks(const std::vector<int>& ids);
+void SetLibraryBooksState(const std::vector<int>& ids, int favorite, int state);
 BOOL RelinkLibraryBook(int id, const TCHAR* path, const TCHAR* key);
 void SaveLibrary();

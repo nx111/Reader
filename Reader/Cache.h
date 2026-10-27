@@ -2,6 +2,7 @@
 #define __CACHE_H__
 
 #include "types.h"
+#include "BookmarkData.h"
 #include <map>
 #include <string>
 
@@ -24,10 +25,13 @@ public:
     static BOOL canonical_path(const TCHAR* path, TCHAR* full);
     static void file_key(const TCHAR* path, TCHAR* key);
     BOOL delete_item(int item_id);
+    int delete_items(const std::vector<int>& ids);
     BOOL delete_all_item(void);
     header_t* default_header();
-    BOOL add_mark(item_t *item, int value);
+    BOOL add_mark(item_t *item, int value, const bookmark_detail_t* detail = NULL);
+    bookmark_detail_t mark_detail(const item_t* item, int index) const;
     BOOL del_mark(item_t *item, int index);
+    void rebase_marks(item_t* item, int start, int delta);
 
 private:
     void default_header(header_t* header);
@@ -47,8 +51,10 @@ private:
     void* m_jsonbak;
     int   m_jsonlen;
     BOOL  m_needsMigration;
+    int   m_loadedSchema;
     std::map<std::wstring, int> m_paths, m_keys;
     std::map<int, int> m_rows;
+    bookmark_store_t m_bookmarks;
 };
 
 #endif

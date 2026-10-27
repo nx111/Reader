@@ -75,6 +75,7 @@ public:
     void Rebind(int* index, header_t* header) { m_pIndex = index; m_header = header; }
     void ResetLayout() { m_DrawType = DRAW_NULL; m_LineCount = 0; }
     virtual void SetReadingPosition(int position);
+    void SetSearchHighlight(int position, int length) { m_SearchStart = position; m_SearchLength = length; }
     void PageUp(HWND hWnd, BOOL draw = TRUE);
     void PageDown(HWND hWnd, BOOL draw = TRUE);
     void LineUp(HWND hWnd, BOOL draw = TRUE);
@@ -149,6 +150,7 @@ private:
     BOOL m_BlankPage;
     int m_ChapterStart;     // for CHAPTER_PAGE
     int m_ChapterLength;    // CHAPTER_PAGE
+    int m_SearchStart, m_SearchLength;
 };
 
 #endif

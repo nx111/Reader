@@ -1136,7 +1136,73 @@ static void WriteLibraryItem(cJSON* parent, const item_t* data)
     for (int i = 0; i < data->mark_size; ++i) cJSON_AddItemToArray(marks, cJSON_CreateNumber(data->mark[i]));
 }
 
-char* create_json(header_t *data)
+static bool ReadBookmarkDetails(cJSON* root, const item_t* items, int count, bookmark_store_t& output)
+{
+    cJSON* array = cJSON_GetObjectItem(root, "bookmark_details");
+    if (!array) return true;
+    if (!cJSON_IsArray(array) || cJSON_GetArraySize(array) > count * MAX_MARK_COUNT) return false;
+    std::map<int, const item_t*> books;
+    for (int i = 0; i < count; ++i) books[items[i].id] = &items[i];
+    std::set<std::pair<int, int> > seen;
+    for (int i = 0; i < cJSON_GetArraySize(array); ++i)
+    {
+        cJSON* record = cJSON_GetArrayItem(array, i);
+        cJSON* book = cJSON_GetObjectItem(record, "book_id");
+        cJSON* index = cJSON_GetObjectItem(record, "mark_index");
+        cJSON* chapter = cJSON_GetObjectItem(record, "chapter");
+        cJSON* position = cJSON_GetObjectItem(record, "position");
+        cJSON* title = cJSON_GetObjectItem(record, "title");
+        cJSON* summary = cJSON_GetObjectItem(record, "summary");
+        if (!cJSON_IsObject(record) || !JsonInteger(book, 1, INT_MAX - 1)
+            || !JsonInteger(index, 0, MAX_MARK_COUNT - 1) || !JsonInteger(chapter, -1, INT_MAX)
+            || !JsonInteger(position, 0, INT_MAX) || !cJSON_IsString(title) || !cJSON_IsString(summary)) return false;
+        std::map<int, const item_t*>::const_iterator found = books.find(book->valueint);
+        if (found == books.end() || index->valueint >= found->second->mark_size
+            || position->valueint != found->second->mark[index->valueint]
+            || !seen.insert(std::make_pair(book->valueint, index->valueint)).second) return false;
+        bookmark_detail_t detail(chapter->valueint, position->valueint);
+        const wchar_t* value = Utf8ToUtf16(title->valuestring);
+        if (!value || wcslen(value) > 255) return false;
+        detail.title = value;
+        value = Utf8ToUtf16(summary->valuestring);
+        if (!value || wcslen(value) > 199) return false;
+        detail.summary = value;
+        std::vector<bookmark_detail_t>& records = output[book->valueint];
+        if (records.empty())
+            for (int j = 0; j < found->second->mark_size; ++j) records.push_back(bookmark_detail_t(-1, found->second->mark[j]));
+        records[index->valueint] = detail;
+    }
+    return true;
+}
+
+static void WriteBookmarkDetails(cJSON* root, header_t* data, const bookmark_store_t* bookmarks)
+{
+    if (!bookmarks || bookmarks->empty()) return;
+    std::map<int, const item_t*> books;
+    const item_t* items = (const item_t*)((const char*)data + sizeof(header_t));
+    for (int i = 0; i < data->item_count; ++i) books[items[i].id] = &items[i];
+    cJSON* array = cJSON_AddArrayToObject(root, "bookmark_details");
+    for (bookmark_store_t::const_iterator book = bookmarks->begin(); book != bookmarks->end(); ++book)
+    {
+        std::map<int, const item_t*>::const_iterator found = books.find(book->first);
+        if (found == books.end()) continue;
+        for (int i = 0; i < (int)book->second.size() && i < found->second->mark_size; ++i)
+        {
+            const bookmark_detail_t& detail = book->second[i];
+            if (detail.position != found->second->mark[i] || (detail.chapter < 0 && detail.title.empty() && detail.summary.empty())) continue;
+            cJSON* record = cJSON_CreateObject();
+            cJSON_AddNumberToObject(record, "book_id", book->first);
+            cJSON_AddNumberToObject(record, "mark_index", i);
+            cJSON_AddNumberToObject(record, "chapter", detail.chapter);
+            cJSON_AddNumberToObject(record, "position", detail.position);
+            cJSON_AddStringToObject(record, "title", Utf16ToUtf8(detail.title.c_str()));
+            cJSON_AddStringToObject(record, "summary", Utf16ToUtf8(detail.summary.c_str()));
+            cJSON_AddItemToArray(array, record);
+        }
+    }
+}
+
+char* create_json(header_t *data, const bookmark_store_t* bookmarks)
 {
     cJSON* root, * header, * items, * item;
     json_header_t* headerobj = NULL;
@@ -1167,6 +1233,7 @@ char* create_json(header_t *data)
     }
     delete headerobj;
 
+    WriteBookmarkDetails(root, data, bookmarks);
     json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return json;
@@ -1178,7 +1245,7 @@ void create_json_free(char* json)
         free(json);
 }
 
-BOOL parser_json(const char* json, header_t* defhdr, void** data, int* size, int* source_schema)
+BOOL parser_json(const char* json, header_t* defhdr, void** data, int* size, int* source_schema, bookmark_store_t* bookmarks)
 {
     *data = NULL; *size = 0;
     cJSON* root = cJSON_ParseWithOpts(json, NULL, TRUE);
@@ -1237,8 +1304,11 @@ BOOL parser_json(const char* json, header_t* defhdr, void** data, int* size, int
         // Old open_item moved the active book to the front but stored its old row.
         defhdr->item_id = defhdr->item_count ? out[0].id : -1;
     }
+    bookmark_store_t details;
+    if (valid) valid = ReadBookmarkDetails(root, out, defhdr->item_count, details);
     if (valid)
     {
+        if (bookmarks) bookmarks->swap(details);
         memcpy(*data, defhdr, sizeof(header_t));
         if (source_schema) *source_schema = schema;
     }

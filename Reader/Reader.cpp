@@ -17,6 +17,8 @@
 #include "DisplaySet.h"
 #include "LibraryDlg.h"
 #include "ReadingState.h"
+#include "SearchDlg.h"
+#include "LibraryModel.h"
 #include <time.h>
 #if ENABLE_TAG
 #include "tagset.h"
@@ -69,6 +71,9 @@ static void PrepareReadingJump(HWND);
 static void FinishReadingJump();
 static void NavigateHistory(HWND, BOOL);
 static BOOL ReaderShortcut(MSG*);
+static void NavigateBookmark(HWND, int);
+void InvalidateReadingText();
+static unsigned long long _documentRevision = 1;
 static void RebindReadingCache();
 static LRESULT CALLBACK TocProc(HWND, UINT, WPARAM, LPARAM);
 static HWND _readerButtons[8] = {};
@@ -197,7 +202,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
     // Main message loop:
     while (GetMessage(&msg, NULL, 0, 0))
     {
-        if (LibraryTranslateMessage(&msg) || ReaderShortcut(&msg)) continue;
+        if (ReaderSearchTranslate(&msg) || LibraryTranslateMessage(&msg) || ReaderShortcut(&msg)) continue;
         if (!_hFindDlg || !IsDialogMessage(_hFindDlg, &msg))
         {
             if (!TranslateAccelerator(_hWnd, hAccelTable, &msg))
@@ -546,7 +551,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                         if (_Book && !_Book->IsLoading() && _item)
                         {
                             if (item.lParam >= 0 && item.lParam < _item->mark_size)
-                                NavigatePosition(hWnd, _item->mark[item.lParam]);
+                                NavigateBookmark(hWnd, (int)item.lParam);
                         }
                         //ShowWindow(_hTreeMark, SW_HIDE);
                         PostMessage(hWnd, WM_COMMAND, IDM_MARK, NULL);
@@ -1022,13 +1027,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
 #endif
     case WM_OPEN_BOOK:
-        OnOpenBookResult(hWnd, wParam == 1);
+        if (ReaderOpenResultIsCurrent(_Book ? _Book->GetOpenToken() : 0, (UINT)lParam))
+            OnOpenBookResult(hWnd, wParam == 1);
         break;
     case WM_COPYDATA:
         OnCopyData(hWnd, message, wParam, lParam);
         break;
     case WM_BOOK_EVENT:
         {
+            wchar_t* previousText = _Book ? _Book->GetText() : NULL;
+            int previousLength = _Book ? _Book->GetTextLength() : 0;
+            int previousChapter = _Book ? _Book->GetCurChapterIndex() : -1;
             book_event_data_t* be = (book_event_data_t*)lParam;
             if (_Book && (!be || _Book == be->_this))
                 _Book->OnBookEvent(hWnd, message, wParam, lParam);
@@ -1041,6 +1050,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     arg->book->OnBookEvent(hWnd, message, wParam, lParam);
             }
 #endif
+            if (_Book && (_Book->GetText() != previousText || _Book->GetTextLength() != previousLength
+                || ((_Book->GetBookType() == book_online || _Book->GetBookType() == book_web) && _Book->GetCurChapterIndex() != previousChapter)))
+                InvalidateReadingText();
         }
         break;
     case WM_SAVE_CACHE:
@@ -1878,20 +1890,46 @@ void ImportLibraryEntries(const std::vector<item_t>& entries)
 void OpenLibraryBook(int id) { OnOpenItem(_hWnd, id, FALSE); }
 void SaveLibrary() { if (_hWnd) { RebindReadingCache(); _update_data(_hWnd, TRUE, TRUE); OnUpdateMenu(_hWnd); } }
 
-BOOL RemoveLibraryBook(int id)
+BOOL RemoveLibraryBook(int id) { return RemoveLibraryBooks(std::vector<int>(1, id)) == 1; }
+
+int RemoveLibraryBooks(const std::vector<int>& ids)
 {
-    if (id == _activeBookId)
+    if (ids.empty()) return 0;
+    bool close = std::find(ids.begin(), ids.end(), _activeBookId) != ids.end();
+    if (_Book && _Book->IsLoading())
     {
+        item_t* loading = _Cache.find_item(_Book->GetFileName());
+        close = close || (loading && std::find(ids.begin(), ids.end(), loading->id) != ids.end());
+    }
+    if (close)
+    {
+        if (EC_IsEditMode()) EC_LeaveEditMode();
         StopAutoPage(_hWnd); StopLoadingImage(_hWnd);
+#ifdef ENABLE_NETWORK
+        chkbook_arg_t* checking = GetCheckBookArguments();
+        if (checking && checking->book == _Book) checking->book = NULL;
+#endif
         delete _Book; _Book = NULL;
         _item = NULL; _activeBookId = -1;
         _readingHistory.Clear(); _jumpPending = _restorePending = FALSE;
+        InvalidateReadingText();
     }
-    if (!_Cache.delete_item(id)) return FALSE;
+    int removed = _Cache.delete_items(ids);
     RebindReadingCache();
     OnUpdateChapters(_hWnd); OnUpdateBookMark(_hWnd);
     SaveLibrary(); LibraryChanged(); UpdateTitle(_hWnd); Invalidate(_hWnd, TRUE, FALSE);
-    return TRUE;
+    return removed;
+}
+
+void SetLibraryBooksState(const std::vector<int>& ids, int favorite, int state)
+{
+    bool changed = false;
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+        item_t* item = _Cache.get_by_id(ids[i]);
+        if (item && LibraryApplyState(*item, favorite, state)) changed = true;
+    }
+    if (changed) { SaveLibrary(); LibraryChanged(); }
 }
 
 BOOL RelinkLibraryBook(int id, const TCHAR* path, const TCHAR* key)
@@ -1913,6 +1951,122 @@ BOOL RelinkLibraryBook(int id, const TCHAR* path, const TCHAR* key)
     return TRUE;
 }
 
+static ReaderSearchToken CurrentSearchToken()
+{
+    ReaderSearchToken token;
+    token.revision = _documentRevision;
+    if (!_Book || !_item || _Book->IsLoading()) return token;
+    token.book = _item->id;
+    if (_Book->GetBookType() == book_online || _Book->GetBookType() == book_web) token.chapter = _Book->GetCurChapterIndex();
+    return token;
+}
+
+std::wstring ReaderSearchScope()
+{
+    if (!_Book || !_item || _Book->IsLoading()) return L"范围：请先打开并加载书籍";
+    if (_Book->GetBookType() == book_online || _Book->GetBookType() == book_web)
+    {
+        if (_Book->GetCurChapterIndex() < 0) return L"范围：在线当前章（目录尚未就绪）";
+        TCHAR title[256] = {}; _Book->GetChapterTitle(title, 256);
+        return std::wstring(L"范围：在线当前章 · ") + title;
+    }
+    return L"范围：本地书籍全文";
+}
+
+static bool CurrentSearchRange(int& begin, int& end)
+{
+    if (!_Book || !_item || _Book->IsLoading() || EC_IsEditMode() || !_Book->GetText() || _Book->GetTextLength() <= 0) return false;
+    begin = 0; end = _Book->GetTextLength();
+    ReaderSearchToken token = CurrentSearchToken();
+    if ((_Book->GetBookType() == book_online || _Book->GetBookType() == book_web) && token.chapter < 0) return false;
+    if (token.chapter >= 0)
+    {
+        chapters_t* chapters = _Book->GetChapters();
+        int current = token.chapter;
+        if (current >= (int)chapters->size() || (*chapters)[current].index < 0) return false;
+        begin = (*chapters)[current].index;
+        if ((*chapters)[current].size > 0)
+            end = (int)(std::min)((long long)end, (long long)begin + (*chapters)[current].size);
+        else for (int i = 0; i < (int)chapters->size(); ++i)
+            if ((*chapters)[i].index > begin) end = (std::min)(end, (*chapters)[i].index);
+    }
+    return begin >= 0 && end > begin;
+}
+
+BOOL CaptureReaderSearch(reader_search_source_t* source)
+{
+    int begin = 0, end = 0;
+    if (!source || !CurrentSearchRange(begin, end)) return FALSE;
+    source->token = CurrentSearchToken(); source->scope = ReaderSearchScope(); source->base = begin;
+    source->chapters.clear();
+    chapters_t* chapters = _Book->GetChapters();
+    if (source->token.chapter >= 0)
+        source->chapters.push_back(ReaderTextChapter(0, (*chapters)[source->token.chapter].title));
+    else for (size_t i = 0; i < chapters->size(); ++i)
+        source->chapters.push_back(ReaderTextChapter((*chapters)[i].index, (*chapters)[i].title));
+    source->text.assign(_Book->GetText() + begin, end - begin);
+    return TRUE;
+}
+
+BOOL ActivateReaderSearch(const ReaderSearchToken& token, int position, int length)
+{
+    int begin = 0, end = 0;
+    if (!(token == CurrentSearchToken()) || token.book < 0 || !CurrentSearchRange(begin, end)
+        || position < begin || length <= 0 || position > end - length) return FALSE;
+    NavigatePosition(_hWnd, position);
+    _Book->SetSearchHighlight(position, length); _Book->ReDraw(_hWnd); Save(_hWnd);
+    return TRUE;
+}
+
+void ClearReaderSearchHighlight()
+{
+    if (_Book) { _Book->SetSearchHighlight(-1, 0); if (!_Book->IsLoading()) _Book->ReDraw(_hWnd); }
+}
+
+void InvalidateReadingText()
+{
+    ++_documentRevision; InvalidateReaderSearch();
+}
+
+static std::wstring BookmarkSummary(int position)
+{
+    if (!_Book || position < 0 || position >= _Book->GetTextLength()) return L"正文尚未加载";
+    int length = (std::min)(150, _Book->GetTextLength() - position);
+    if (position + length < _Book->GetTextLength() && length > 0
+        && ReaderHighSurrogate(_Book->GetText()[position + length - 1]) && ReaderLowSurrogate(_Book->GetText()[position + length])) --length;
+    return ReaderMakeExcerpt(std::wstring(_Book->GetText() + position, length), 0, 0, 150).text;
+}
+
+static bookmark_detail_t DescribeBookmark(int index)
+{
+    bookmark_detail_t detail = _Cache.mark_detail(_item, index);
+    if (!_Book || !_item) return detail;
+    chapters_t* chapters = _Book->GetChapters();
+    int position = detail.position;
+    int chapter = detail.chapter;
+    if (chapter >= 0)
+    {
+        if (chapter < (int)chapters->size())
+        {
+            if (detail.title.empty()) detail.title = (*chapters)[chapter].title;
+            position = (*chapters)[chapter].index >= 0 ? (*chapters)[chapter].index + detail.position : -1;
+        }
+        else position = -1;
+    }
+    else if (_Book->GetBookType() == book_web)
+    { if (detail.title.empty()) detail.title = L"旧书签（章节未知）"; position = -1; }
+    else if (detail.title.empty())
+    {
+        std::vector<ReaderTextChapter> entries;
+        for (size_t i = 0; i < chapters->size(); ++i) entries.push_back(ReaderTextChapter((*chapters)[i].index, (*chapters)[i].title));
+        chapter = ReaderChapterAt(entries, position);
+        detail.title = chapter >= 0 ? entries[chapter].title : L"正文";
+    }
+    if (detail.summary.empty()) detail.summary = BookmarkSummary(position);
+    if (detail.title.empty()) detail.title = L"正文";
+    return detail;
+}
+
 static ReadingAnchor CurrentReadingAnchor()
 {
     if (!_item || !_Book) return ReadingAnchor();
@@ -1928,6 +2082,7 @@ static BOOL BeginReadingJump()
 {
     if (!_item || !_Book || _Book->IsLoading() || EC_IsEditMode()) return FALSE;
     FinishReadingJump();
+    _Book->SetSearchHighlight(-1, 0);
     _jumpOrigin = CurrentReadingAnchor(); _jumpPending = TRUE;
     _replaying = _restorePending = FALSE;
     return TRUE;
@@ -1987,6 +2142,22 @@ static void FinishReadingJump()
     _jumpPending = _replaying = FALSE;
     EnableWindow(_readerButtons[5], _readingHistory.CanBack());
     EnableWindow(_readerButtons[6], _readingHistory.CanForward());
+}
+
+static void NavigateBookmark(HWND hWnd, int index)
+{
+    if (!_item || index < 0 || index >= _item->mark_size || !_Book || _Book->IsLoading()) return;
+    bookmark_detail_t detail = _Cache.mark_detail(_item, index);
+    if (detail.chapter < 0)
+    {
+        if (_Book->GetBookType() == book_web && MessageBox(hWnd, _T("旧书签没有章节信息。是否在当前章节按原位置定位？"), _T("旧书签"), MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+        NavigatePosition(hWnd, _item->mark[index]); return;
+    }
+    if (detail.chapter >= (int)_Book->GetChapters()->size() || !BeginReadingJump()) return;
+    _restoreAnchor = ReadingAnchor(_item->id, detail.chapter, detail.position, true);
+    _restorePending = TRUE;
+    if (detail.chapter != _Book->GetCurChapterIndex()) _Book->JumpChapter(hWnd, detail.chapter);
+    else { PrepareReadingJump(hWnd); _Book->ReDraw(hWnd); }
 }
 
 BOOL GetReadingRect(HWND hWnd, RECT* rect)
@@ -2094,6 +2265,7 @@ static BOOL ReaderShortcut(MSG* message)
         UpdateReaderLayout(_hWnd); Invalidate(_hWnd, TRUE, FALSE); SetFocus(_hWnd);
         return TRUE;
     }
+    if (message->wParam == VK_F3) { AdvanceReaderSearch((GetKeyState(VK_SHIFT) & 0x8000) != 0); return TRUE; }
     if (!command) return FALSE;
     SendMessage(_hWnd, WM_COMMAND, command, 0);
     return TRUE;
@@ -2289,6 +2461,7 @@ LRESULT OnClearFileList(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     CloseLibrary();
     _Cache.delete_all_item();
+    InvalidateReadingText();
     _item = NULL; _activeBookId = -1; _readingHistory.Clear();
     _jumpPending = _restorePending = FALSE;
     LibraryChanged();
@@ -2841,16 +3014,28 @@ LRESULT OnOpenFile(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 LRESULT OnAddMark(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     int ret;
-    if (_Book && !_Book->IsLoading())
+    if (_Book && _item && !_Book->IsLoading())
     {
         ret = MessageBox_(hWnd, IDS_ADD_BOOKMARK_TIPS, IDS_BOOKMARK, MB_ICONINFORMATION|MB_YESNO);
         if (ret == IDYES)
         {
-            if (_Cache.add_mark(_item, _item->index))
+            int chapter = _Book->GetCurChapterIndex();
+            bool relative = _Book->GetBookType() == book_online || _Book->GetBookType() == book_web;
+            int position = _item->index;
+            bookmark_detail_t detail;
+            if (chapter >= 0 && chapter < (int)_Book->GetChapters()->size())
+            {
+                const chapter_item_t& entry = (*_Book->GetChapters())[chapter];
+                detail.title = ReaderClipText(entry.title, 255);
+                if (relative && entry.index >= 0) { detail.chapter = chapter; position -= entry.index; }
+            }
+            detail.position = position; detail.summary = BookmarkSummary(_item->index);
+            if (_Cache.add_mark(_item, position, &detail))
             {
                 OnUpdateBookMark(hWnd);
                 Save(hWnd);
             }
+            else MessageBox(hWnd, _T("该位置已有书签，或书签已达到容量限制。"), _T("书签"), MB_OK | MB_ICONINFORMATION);
         }
     }
     return 0;
@@ -3077,67 +3262,7 @@ LRESULT OnDropFiles(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 LRESULT OnFindText(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    static FINDREPLACE fr;       // common dialog box structure
-    static TCHAR szFindWhat[80] = {0}; // buffer receiving string
-    int len;
-
-    if (message == _uFindReplaceMsg)
-    {
-        if (fr.Flags & FR_DIALOGTERM)
-        {
-            // close dlg
-            DestroyWindow(_hFindDlg);
-            _hFindDlg = NULL;
-            return 0;
-        }
-        if (!_Book || !_item || _Book->IsLoading()) return 0;
-        len = (int)_tcslen(szFindWhat);
-        if (len <= 0) return 0;
-        if (fr.Flags & FR_DOWN) // back search
-        {
-            for (int i=_item->index+1; i<_Book->GetTextLength()-len+1; i++)
-            {
-                if (0 == memcmp(szFindWhat, _Book->GetText()+i, len*sizeof(TCHAR)))
-                {
-                    NavigatePosition(hWnd, i);
-                    Save(hWnd);
-                    break;
-                }
-            }
-        }
-        else // front search
-        {
-            for (int i=(std::min)(_item->index-1, _Book->GetTextLength()-len); i>=0; i--)
-            {
-                if (0 == memcmp(szFindWhat, _Book->GetText()+i, len*sizeof(TCHAR)))
-                {
-                    NavigatePosition(hWnd, i);
-                    Save(hWnd);
-                    break;
-                }
-            }
-        }
-    }
-    else
-    {
-        if (!IsWindow(_hFindDlg))
-        {
-            // Initialize FINDREPLACE
-            ZeroMemory(&fr, sizeof(fr));
-            fr.lStructSize = sizeof(fr);
-            fr.hwndOwner = hWnd;
-            fr.hInstance = hInst;
-            fr.lpstrFindWhat = szFindWhat;
-            fr.wFindWhatLen = 80;
-            fr.Flags = FR_DOWN;
-
-            _hFindDlg = FindText(&fr);
-            if (_hFindDlg && _Book)
-                SetWindowText(_hFindDlg, _Book->GetBookType() == book_web ? _T("查找（当前章节）") :
-                    _Book->GetBookType() == book_online ? _T("查找（已加载正文）") : _T("查找（本书全文）"));
-        }
-    }
-
+    OpenReaderSearch(hWnd);
     return 0;
 }
 
@@ -3195,10 +3320,9 @@ LRESULT OnUpdateBookMark(HWND hWnd)
 
         for (i=0; i<_item->mark_size; i++)
         {
-            if (_item->mark[i] < 0 || _item->mark[i] >= _Book->GetTextLength()) continue;
-            len = _item->mark[i] + (MAX_MARK_TEXT - 1) > _Book->GetTextLength() ? _Book->GetTextLength() - _item->mark[i] : (MAX_MARK_TEXT - 1);
-            memcpy(szText, _Book->GetText()+_item->mark[i], sizeof(TCHAR)*len);
-            szText[len] = 0;
+            bookmark_detail_t detail = DescribeBookmark(i);
+            std::wstring label = detail.title + L" · " + detail.summary;
+            _tcsncpy(szText, label.c_str(), MAX_MARK_TEXT - 1); szText[MAX_MARK_TEXT - 1] = 0;
 
             tvi.pszText = szText; 
             tvi.cchTextMax = MAX_MARK_TEXT;
@@ -3279,6 +3403,7 @@ LRESULT OnOpenBookResult(HWND hWnd, BOOL result)
     }
 #endif
 
+    InvalidateReadingText();
     // update menu
     OnUpdateMenu(hWnd);
 
@@ -3522,6 +3647,7 @@ void OnOpenBook(HWND hWnd, TCHAR *filename, BOOL forced)
         _Book = NULL;
     }
 
+    InvalidateReadingText();
     OnUpdateChapters(hWnd); OnUpdateBookMark(hWnd);
 
     if (_tcsicmp(ext, _T(".txt")) == 0)
@@ -3656,12 +3782,7 @@ void UpdateBookMark(HWND hWnd, int index, int size)
         return;
     }
 
-    for (i=0; i<_item->mark_size; i++)
-    {
-        if (_item->mark[i] < index)
-            continue;
-        _item->mark[i] += size;
-    }
+    _Cache.rebase_marks(_item, index, size);
 }
 #endif
 
@@ -3724,6 +3845,7 @@ void Exit(void)
 
 static void _free_resource(HWND hWnd)
 {
+    CloseReaderSearch();
     CloseLibrary();
     if (_readerUIFont) { DeleteObject(_readerUIFont); _readerUIFont = NULL; }
     // stop loading
@@ -3856,7 +3978,9 @@ void UpdateProgess(void)
     if (_item && _Book && !_Book->IsLoading())
     {
         _item->text_length = _Book->GetTextLength();
-        if (_Book->GetBookType() != book_online && _Book->GetBookType() != book_web && _item->index > 0 && _Book->IsLastPage())
+        static ReaderProgressObservation observed;
+        if (observed.MarkRead(_Book->GetOpenToken(), _item->index,
+            _Book->GetBookType() != book_online && _Book->GetBookType() != book_web, _Book->IsLastPage()))
             _item->read_state = 2;
         dprog = (double)_Book->GetProgress();
         nprog = (int)(dprog * 100);

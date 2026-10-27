@@ -1,5 +1,6 @@
 #include "LibraryDlg.h"
 #include "LibraryModel.h"
+#include "ReaderText.h"
 #include "DPIAwareness.h"
 #include "Utils.h"
 #include <commctrl.h>
@@ -11,6 +12,7 @@
 #include <deque>
 #include <memory>
 #include <map>
+#include <set>
 #include <time.h>
 #include "unzip.h"
 #include "iowin32.h"
@@ -28,6 +30,7 @@ std::vector<int> rows;
 std::map<int, bool> missing;
 int sortColumn = -1;
 bool ascending = true;
+bool updatingSelection = false;
 HFONT uiFont = NULL;
 UINT libraryDpi = 96;
 int Scale(int value) { return MulDiv(value, libraryDpi, 96); }
@@ -65,7 +68,7 @@ void CopyMetadata(wchar_t* target, const char* value)
     if (!value || !*value) return;
     int length = 0;
     wchar_t* wide = utf8_to_utf16(value, (int)strlen(value), &length);
-    if (wide) { wcsncpy(target, wide, 255); target[255] = 0; free_buffer(wide); }
+    if (wide) { std::wstring clipped = ReaderClipText(wide, 255); wcscpy(target, clipped.c_str()); free_buffer(wide); }
 }
 
 bool ZipText(unzFile zip, const char* name, std::string& out)
@@ -208,16 +211,50 @@ unsigned __stdcall ImportThread(void* argument)
     return 0;
 }
 
+std::vector<int> SelectedIds()
+{
+    std::vector<int> selected;
+    int row = -1;
+    while ((row = ListView_GetNextItem(list, row, LVNI_SELECTED)) >= 0)
+        if (row < (int)rows.size()) selected.push_back(rows[row]);
+    return selected;
+}
+
 int SelectedId()
 {
+    if (ListView_GetSelectedCount(list) != 1) return -1;
     int row = ListView_GetNextItem(list, -1, LVNI_SELECTED);
     return row >= 0 && row < (int)rows.size() ? rows[row] : -1;
+}
+
+void SelectionStatus()
+{
+    if (!cache || !list || job || updatingSelection) return;
+    wchar_t text[180];
+    _stprintf(text, L"%u / %d 本 · 已选 %u 本 · Ctrl+A 全选；移出不会删除文件", (unsigned)rows.size(), cache->get_header()->item_count, ListView_GetSelectedCount(list));
+    SetWindowText(status, text);
+}
+
+int StateMenu(bool favorite)
+{
+    HMENU menu = CreatePopupMenu();
+    if (favorite)
+    { AppendMenu(menu, MF_STRING, 1, L"设为收藏"); AppendMenu(menu, MF_STRING, 2, L"取消收藏"); }
+    else
+    { AppendMenu(menu, MF_STRING, 1, L"标为未读（保留进度）"); AppendMenu(menu, MF_STRING, 2, L"标为在读"); AppendMenu(menu, MF_STRING, 3, L"标为已读"); }
+    RECT bounds; GetWindowRect(GetDlgItem(library, favorite ? favorite_id : read_id), &bounds);
+    int action = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, bounds.left, bounds.bottom, 0, library, NULL);
+    DestroyMenu(menu);
+    return action;
 }
 
 void RefreshRows()
 {
     if (!cache || !list) return;
-    int selected = SelectedId();
+    std::vector<int> selectedIds = SelectedIds();
+    std::set<int> selected(selectedIds.begin(), selectedIds.end());
+    int focusRow = ListView_GetNextItem(list, -1, LVNI_FOCUSED);
+    int focused = focusRow >= 0 && focusRow < (int)rows.size() ? rows[focusRow] : -1;
     wchar_t query[256] = {};
     GetWindowText(search, query, 256);
     int mode = (int)SendMessage(filter, CB_GETCURSEL, 0, 0);
@@ -236,21 +273,33 @@ void RefreshRows()
             return ascending ? value < 0 : value > 0;
         });
     }
+    updatingSelection = true;
     ListView_SetItemCountEx(list, (int)rows.size(), LVSICF_NOINVALIDATEALL);
     ListView_SetItemState(list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-    for (size_t i = 0; i < rows.size(); ++i) if (rows[i] == selected)
-    { ListView_SetItemState(list, (int)i, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED); break; }
+    for (size_t i = 0; i < rows.size(); ++i)
+    {
+        UINT state = (selected.count(rows[i]) ? LVIS_SELECTED : 0) | (rows[i] == focused ? LVIS_FOCUSED : 0);
+        if (state) ListView_SetItemState(list, (int)i, state, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    updatingSelection = false;
     InvalidateRect(list, NULL, FALSE);
-    wchar_t text[160];
-    _stprintf(text, L"%u / %d 本 · 索引原文件；移出书库不会删除文件", (unsigned)rows.size(), cache->get_header()->item_count);
-    if (!job) SetWindowText(status, text);
+    SelectionStatus();
 }
 
 void SetBusy(bool busy)
 {
-    const int controls[] = { add_id, folder_id, relink_id, refresh_id };
+    const int controls[] = { add_id, folder_id, relink_id, refresh_id, remove_id };
     for (size_t i = 0; i < sizeof(controls) / sizeof(*controls); ++i) EnableWindow(GetDlgItem(library, controls[i]), !busy);
     EnableWindow(GetDlgItem(library, stop_id), busy);
+}
+
+void CancelImport()
+{
+    if (!job) return;
+    bool checkOnly = job->checkOnly;
+    SetEvent(job->cancel); job.reset(); KillTimer(library, import_timer); SetBusy(false);
+    if (!checkOnly) SaveLibrary();
+    RefreshRows(); SetWindowText(status, L"已停止；已入库的记录保留，未处理的队列已丢弃。");
 }
 
 void StartJob(const std::shared_ptr<ImportJob>& task)
@@ -386,10 +435,10 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             const wchar_t* filters[] = { L"全部", L"在读", L"已读", L"收藏", L"失联" };
             for (int i = 0; i < 5; ++i) SendMessage(filter, CB_ADDSTRING, 0, (LPARAM)filters[i]);
             SendMessage(filter, CB_SETCURSEL, 0, 0);
-            const wchar_t* labels[] = { L"添加文件", L"添加文件夹", L"继续阅读", L"重新关联", L"收藏／取消", L"已读／在读", L"移出书库", L"刷新", L"停止" };
+            const wchar_t* labels[] = { L"添加文件", L"添加文件夹", L"继续阅读", L"重新关联", L"收藏操作", L"阅读状态", L"移出书库", L"刷新", L"停止" };
             const int ids[] = { add_id, folder_id, open_id, relink_id, favorite_id, read_id, remove_id, refresh_id, stop_id };
             for (int i = 0; i < 9; ++i) CreateWindow(L"BUTTON", labels[i], WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, window, (HMENU)(INT_PTR)ids[i], NULL, NULL);
-            list = CreateWindowEx(WS_EX_CLIENTEDGE, WC_LISTVIEW, L"本地书库", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_OWNERDATA | LVS_SHOWSELALWAYS, 0, 0, 0, 0, window, (HMENU)list_id, NULL, NULL);
+            list = CreateWindowEx(WS_EX_CLIENTEDGE, WC_LISTVIEW, L"本地书库", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, 0, 0, 0, 0, window, (HMENU)list_id, NULL, NULL);
             ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
             const wchar_t* titles[] = { L"书名", L"作者", L"格式", L"进度", L"最近阅读", L"状态", L"原文件" };
             const int widths[] = { 205, 120, 65, 110, 145, 100, 350 };
@@ -405,7 +454,8 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         ((MINMAXINFO*)lParam)->ptMinTrackSize.y = Scale(360); return 0;
     case 0x02E0: // WM_DPICHANGED
         {
-            libraryDpi = LOWORD(wParam);
+            UINT oldDpi = libraryDpi; libraryDpi = LOWORD(wParam);
+            for (int i = 0; i < 7; ++i) ListView_SetColumnWidth(list, i, MulDiv(ListView_GetColumnWidth(list, i), libraryDpi, oldDpi));
             HFONT previous = uiFont;
             LOGFONT font = {}; GetObject(previous, sizeof(font), &font);
             font.lfHeight = -MulDiv(9, libraryDpi, 72); font.lfWidth = 0;
@@ -425,6 +475,8 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         {
             int command = LOWORD(wParam), notification = HIWORD(wParam);
             int id = SelectedId(); item_t* item = cache->get_by_id(id);
+            std::vector<int> selected;
+            if (command == remove_id || command == favorite_id || command == read_id) selected = SelectedIds();
             if ((command == search_id && notification == EN_CHANGE) || (command == filter_id && notification == CBN_SELCHANGE))
                 SetTimer(window, filter_timer, 150, NULL);
             else if (command == add_id && !job)
@@ -437,13 +489,22 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                 { std::shared_ptr<ImportJob> task(new ImportJob); task->roots.push_back(path); StartJob(task); }
                 CoTaskMemFree(selected);
             }
-            else if (command == stop_id && job) SetEvent(job->cancel);
+            else if (command == stop_id && job) CancelImport();
             else if (command == refresh_id && !job) CheckFiles();
+            else if ((command == open_id || command == relink_id) && id < 0)
+                SetWindowText(status, L"继续阅读或重新关联时，请只选择一本书。");
             else if (command == open_id) ActivateSelected();
-            else if (command == remove_id && item)
+            else if (command == remove_id && !job)
             {
-                if (MessageBox(window, L"移出这本书？将移除本条阅读记录和书签；磁盘原文件会保留。", L"移出书库", MB_YESNO | MB_ICONQUESTION) == IDYES)
-                { RemoveLibraryBook(id); missing.erase(id); RefreshRows(); }
+                if (selected.empty()) { SetWindowText(status, L"请先选择要移出的书籍。"); return 0; }
+                wchar_t question[180];
+                _stprintf(question, L"从书库移出选中的 %u 本书？将移除这些阅读记录和书签；磁盘原文件会保留。", (unsigned)selected.size());
+                if (MessageBox(window, question, L"批量移出书库", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES)
+                {
+                    RemoveLibraryBooks(selected);
+                    for (size_t i = 0; i < selected.size(); ++i) missing.erase(selected[i]);
+                    RefreshRows();
+                }
             }
             else if (command == relink_id && item && !job)
             {
@@ -458,8 +519,16 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                     else MessageBox(window, L"无法关联。文件须存在；合并不能丢弃超出容量的书签。记录仍保留。", L"本地书库", MB_OK | MB_ICONERROR);
                 }
             }
-            else if (command == favorite_id && item) { item->favorite = !item->favorite; SaveLibrary(); RefreshRows(); }
-            else if (command == read_id && item) { item->read_state = item->read_state == 2 ? 1 : 2; SaveLibrary(); RefreshRows(); }
+            else if (command == favorite_id || command == read_id)
+            {
+                if (selected.empty()) { SetWindowText(status, L"请先选择书籍，可用 Ctrl／Shift 多选。"); return 0; }
+                int action = StateMenu(command == favorite_id);
+                if (action)
+                {
+                    SetLibraryBooksState(selected, command == favorite_id ? (action == 1 ? 1 : 0) : -1, command == read_id ? action - 1 : -1);
+                    RefreshRows();
+                }
+            }
         } return 0;
     case WM_NOTIFY:
         {
@@ -504,6 +573,7 @@ LRESULT CALLBACK LibraryProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             }
             else if (header->code == LVN_COLUMNCLICK)
             { int column = ((NMLISTVIEW*)lParam)->iSubItem; ascending = sortColumn == column ? !ascending : column != 4; sortColumn = column; RefreshRows(); }
+            else if (header->code == LVN_ITEMCHANGED || header->code == LVN_ODSTATECHANGED) SelectionStatus();
             else if (header->code == NM_DBLCLK) ActivateSelected();
             else if (header->code == LVN_KEYDOWN)
             {
@@ -544,8 +614,22 @@ void CloseLibrary() { if (library) DestroyWindow(library); }
 BOOL LibraryTranslateMessage(MSG* message)
 {
     if (!library || !IsWindowVisible(library) || (message->hwnd != library && !IsChild(library, message->hwnd))) return FALSE;
-    if (message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE) { ShowWindow(library, SW_HIDE); return TRUE; }
-    if (message->message == WM_KEYDOWN && message->wParam == 'F' && (GetKeyState(VK_CONTROL) & 0x8000)) { SetFocus(search); return TRUE; }
-    if (message->hwnd == list && message->message == WM_KEYDOWN && message->wParam == VK_RETURN) { ActivateSelected(); return TRUE; }
+    if (message->message == WM_KEYDOWN)
+    {
+        LibraryKeyCommand command = LibraryKey((unsigned)message->wParam,
+            (GetKeyState(VK_CONTROL) & 0x8000) != 0, message->hwnd == list, job != NULL);
+        switch (command)
+        {
+        case library_key_cancel: CancelImport(); return TRUE;
+        case library_key_close: ShowWindow(library, SW_HIDE); return TRUE;
+        case library_key_focus: SetFocus(search); return TRUE;
+        case library_key_select_all:
+            updatingSelection = true; ListView_SetItemState(list, -1, LVIS_SELECTED, LVIS_SELECTED);
+            updatingSelection = false; SelectionStatus(); return TRUE;
+        case library_key_open: ActivateSelected(); return TRUE;
+        case library_key_remove: if (!job) SendMessage(library, WM_COMMAND, remove_id, 0); return TRUE;
+        default: break;
+        }
+    }
     return IsDialogMessage(library, message);
 }
