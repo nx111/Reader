@@ -32,8 +32,9 @@ int main(int argc,char** argv)
     {
         for(int i=0;i<30;++i) {ReaderPdfFrame f=frame;f.page=i%2;assert(pdf.Render(f,request,10));}
         for(int i=0;i<20;++i) {ReaderPdfDocument next;assert(next.Open(wide.from_bytes(argv[2]),wide.from_bytes(argv[3])));next.Close();}
-        std::thread a([&]{ReaderPdfDocument other;assert(other.Open(wide.from_bytes(argv[2]),wide.from_bytes(argv[3])));assert(other.Render(frame,request,10));});
-        ReaderPdfFrame second=frame;assert(pdf.Render(second,request,10));a.join();
+        ReaderPdfFrame otherFrame=frame,second=frame;
+        std::thread a([&]{ReaderPdfDocument other;assert(other.Open(wide.from_bytes(argv[2]),wide.from_bytes(argv[3])));assert(other.Render(otherFrame,request,10));});
+        assert(pdf.Render(second,request,10));a.join();
     }
     std::cout<<"PDF engine "<<action<<" passed\n";
 }

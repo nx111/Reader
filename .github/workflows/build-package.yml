@@ -41,6 +41,10 @@ jobs:
           /p:PlatformToolset=v143
           /p:WindowsTargetPlatformVersion=10.0
 
+      - name: Test native PDF core
+        shell: pwsh
+        run: ./tests/run_windows_pdf_smoke.ps1 -Architecture ${{ matrix.arch }}
+
       - name: Package Reader
         id: package
         shell: pwsh
@@ -60,6 +64,8 @@ jobs:
           Copy-Item -LiteralPath 'opensrc/pdfium/dependency.json' -Destination $notices
           New-Item -ItemType Directory -Force 'dist' | Out-Null
           & '.\tool\7z.exe' a "dist\$packageName.7z" "$packageDir\*"
+          if ($LASTEXITCODE -ne 0) { throw 'Package creation failed' }
+          ./tests/verify_windows_package.ps1 -Archive "dist\$packageName.7z" -Architecture ${{ matrix.arch }}
           "name=$packageName" >> $env:GITHUB_OUTPUT
 
       - name: Upload package

@@ -138,6 +138,8 @@ class UiSourceContractTests(unittest.TestCase):
         for argument in ("/p:Configuration=Release", "/p:PlatformToolset=v143", "/p:WindowsTargetPlatformVersion=10.0"):
             self.assertIn(argument, actual)
         self.assertIn("scripts/fetch-pdfium.ps1", actual)
+        self.assertIn("tests/run_windows_pdf_smoke.ps1", actual)
+        self.assertIn("tests/verify_windows_package.ps1", actual)
         self.assertIn("platform: x86", actual); self.assertIn("platform: x64", actual)
         solution = (ROOT / "Reader.sln").read_text(encoding="utf-8-sig")
         for platform in ("x86", "x64"):
